@@ -19,8 +19,8 @@
 	"license": "Apache-2.0",
 	"devDependencies": {
 		"@superset/typescript": "*",
-		"@types/culori": "^2.0.4",
-		"typescript": "^5.5.4"
+		"@types/culori": "^4.0.1",
+		"typescript": "^5.9.3"
 	},
 	"dependencies": {
 		"@superset/constants": "*"

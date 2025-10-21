@@ -22,18 +22,18 @@
 	"dependencies": {
 		"@superset/constants": "*",
 		"@superset/models": "*",
-		"ai": "^5.0.60",
-		"dotenv": "^17.2.1",
-		"drizzle-orm": "^0.44.5",
+		"ai": "^5.0.76",
+		"dotenv": "^17.2.3",
+		"drizzle-orm": "^0.44.6",
 		"drizzle-zod": "^0.8.3",
 		"pg": "^8.16.3",
 		"postgres": "^3.4.7",
-		"uuid": "^11.1.0",
+		"uuid": "^13.0.0",
 		"zod": "^4.1.12"
 	},
 	"devDependencies": {
 		"@superset/typescript": "*",
-		"drizzle-kit": "^0.31.4",
-		"typescript": "^5.8.2"
+		"drizzle-kit": "^0.31.5",
+		"typescript": "^5.9.3"
 	}
 }

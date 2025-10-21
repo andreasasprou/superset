@@ -1,12 +1,8 @@
 {
-    "extends": "@superset/typescript/base.json",
-    "compilerOptions": {
-        "baseUrl": "."
-    },
-    "include": [
-        "src"
-    ],
-    "exclude": [
-        "node_modules"
-    ]
+	"extends": "@superset/typescript/base.json",
+	"compilerOptions": {
+		"baseUrl": "."
+	},
+	"include": ["src"],
+	"exclude": ["node_modules"]
 }

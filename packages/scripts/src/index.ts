@@ -14,28 +14,27 @@ const clientEnvPath = path.join(rootDir, "apps", "web", "client", ".env");
 const dbEnvPath = path.join(rootDir, "packages", "db", ".env");
 
 program
-	.name("setup:env")
-	.description("Automate environment setup for Onlook development")
-	.version("0.0.1")
-	.action(async () => {
-		console.log(
-			chalk.bold.blue(
-				"🔑 Onlook Environment Setup Script\n==================================",
-			),
-		);
-		try {
-			// First handle backend keys and write to both client and db files
-			await promptAndWriteBackendKeys(clientEnvPath, dbEnvPath);
+    .name("setup:env")
+    .description("Automate environment setup for development")
+    .version("0.0.1")
+    .action(async () => {
+        console.log(
+            chalk.bold.blue(
+                "🔑 Running Environment Setup Script\n==================================",
+            ),
+        );
+        try {
+            // First handle backend keys and write to both client and db files
+            await promptAndWriteBackendKeys(clientEnvPath, dbEnvPath);
 
-			// Then handle API keys and append to the existing client file
-			await promptAndWriteApiKeys(clientEnvPath);
+            // Then handle API keys and append to the existing client file
+            await promptAndWriteApiKeys(clientEnvPath);
 
-			console.log(chalk.green("✅ Environment files created successfully!"));
-			console.log(chalk.cyan("Next steps: https://docs.onlook.com"));
-		} catch (err) {
-			console.error(chalk.red("Error creating .env files:"), err);
-			process.exit(1);
-		}
-	});
+            console.log(chalk.green("✅ Environment files created successfully!"));
+        } catch (err) {
+            console.error(chalk.red("Error creating .env files:"), err);
+            process.exit(1);
+        }
+    });
 
 program.parse(process.argv);
