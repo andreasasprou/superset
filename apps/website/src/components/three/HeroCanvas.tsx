@@ -3,8 +3,8 @@
 import { Center, Text } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Suspense, useRef } from "react";
+import type * as THREE from "three";
 import type { Mesh, PointLight } from "three";
-import * as THREE from "three";
 
 function LitBackground() {
     const meshRef = useRef<Mesh>(null);
@@ -27,7 +27,11 @@ function LitBackground() {
             const saturation = 60 + ((state.mouse.y + 1) / 2) * 40; // 60-100%
             const lightness = 65; // Slightly brighter for cool colors
 
-            lightRef.current.color.setHSL(hue / 360, saturation / 100, lightness / 100);
+            lightRef.current.color.setHSL(
+                hue / 360,
+                saturation / 100,
+                lightness / 100,
+            );
         }
 
         // Make the text group face the camera
@@ -81,16 +85,14 @@ function LitBackground() {
                 <Text
                     position={[0, 0, 0.02]}
                     fontSize={1.805}
-                    color="#000000"
+                    color="black"
                     anchorX="center"
                     anchorY="middle"
-                    outlineWidth={0.008}
-                    outlineColor="#000000"
+                    outlineWidth={0.0001}
+                    outlineColor="#575757"
                 >
                     ⊇
-                    <meshBasicMaterial
-                        color="#000000"
-                    />
+                    <meshBasicMaterial color="#000000" />
                 </Text>
 
                 {/* Create depth by layering multiple text instances */}
@@ -120,8 +122,16 @@ function LitBackground() {
             <ambientLight intensity={0.4} />
 
             {/* Static directional lights for consistent highlights */}
-            <directionalLight position={[10, 10, 5]} intensity={1.2} color="#ffffff" />
-            <directionalLight position={[-8, -8, 5]} intensity={0.6} color="#4488ff" />
+            <directionalLight
+                position={[10, 10, 5]}
+                intensity={1.2}
+                color="#ffffff"
+            />
+            <directionalLight
+                position={[-8, -8, 5]}
+                intensity={0.6}
+                color="#4488ff"
+            />
 
             {/* Point light that follows mouse */}
             <pointLight
