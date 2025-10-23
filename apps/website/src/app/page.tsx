@@ -1,8 +1,8 @@
 "use client";
 
-import type { ReactNode } from "react";
 import { Card } from "@superset/ui/card";
 import { motion } from "framer-motion";
+import type { ReactNode } from "react";
 import { FadeUp } from "@/components/motion/FadeUp";
 import { HeroParallax } from "@/components/motion/HeroParallax";
 import { TiltCard } from "@/components/motion/TiltCard";
@@ -143,7 +143,9 @@ function ScaleFeatureCard({
 	children,
 }: ScaleFeatureCardProps) {
 	const shadowClass =
-		shadowColor === "green" ? "hover:shadow-green-500/10" : "hover:shadow-blue-500/10";
+		shadowColor === "green"
+			? "hover:shadow-green-500/10"
+			: "hover:shadow-blue-500/10";
 
 	return (
 		<motion.div
@@ -230,7 +232,9 @@ function ScaleFeaturesSection() {
 						<div className="mt-8 relative">
 							<div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/20 rounded-full blur-3xl" />
 							<div className="relative p-4 bg-zinc-900 rounded-2xl border border-zinc-800">
-								<div className="text-xs text-zinc-400 mb-2">Version Control</div>
+								<div className="text-xs text-zinc-400 mb-2">
+									Version Control
+								</div>
 								<div className="space-y-2">
 									<div className="p-2 bg-zinc-800 rounded text-white text-sm">
 										Version A

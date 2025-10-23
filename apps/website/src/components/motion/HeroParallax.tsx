@@ -17,11 +17,7 @@ export function useHeroVisibility() {
 	return useContext(HeroVisibilityContext);
 }
 
-export function HeroParallax({
-	children,
-	speed = 0.5,
-	className,
-}: HeroParallaxProps) {
+export function HeroParallax({ children, className }: HeroParallaxProps) {
 	const ref = useRef<HTMLDivElement>(null);
 	const [isVisible, setIsVisible] = useState(true);
 

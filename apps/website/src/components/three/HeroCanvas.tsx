@@ -1,25 +1,70 @@
 "use client";
 
-import { Center, Text } from "@react-three/drei";
+import { Text } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Suspense, useRef } from "react";
-import type * as THREE from "three";
+import { Suspense, useMemo, useRef } from "react";
 import type { Mesh, PointLight } from "three";
+import * as THREE from "three";
 import { useHeroVisibility } from "../motion/HeroParallax";
+
+// Custom shader for wave animation (GPU-accelerated)
+const waveVertexShader = `
+  uniform float uTime;
+  varying vec3 vNormal;
+
+  void main() {
+    vec3 pos = position;
+
+    // Create wave effect using sine waves
+    float wave1 = sin(pos.x * 0.5 + uTime * 0.5) * 0.1;
+    float wave2 = sin(pos.y * 0.5 + uTime * 0.3) * 0.1;
+    pos.z += wave1 + wave2;
+
+    vNormal = normalize(normalMatrix * normal);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  }
+`;
+
+const waveFragmentShader = `
+  uniform vec3 uColor;
+  uniform float uRoughness;
+  uniform float uMetalness;
+  varying vec3 vNormal;
+
+  void main() {
+    // Simple lighting calculation
+    vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+    float diff = max(dot(vNormal, lightDir), 0.0);
+    vec3 color = uColor * (0.3 + diff * 0.7);
+    gl_FragColor = vec4(color, 1.0);
+  }
+`;
 
 function LitBackground() {
 	const meshRef = useRef<Mesh>(null);
 	const lightRef = useRef<PointLight>(null);
 	const textGroupRef = useRef<THREE.Group>(null);
 	const { viewport, camera } = useThree();
-	const frameCountRef = useRef(0);
 	const isVisible = useHeroVisibility();
+
+	// Create shader material with uniforms
+	const shaderMaterial = useMemo(
+		() => ({
+			uniforms: {
+				uTime: { value: 0 },
+				uColor: { value: new THREE.Color("#1a1a1a") },
+				uRoughness: { value: 0.8 },
+				uMetalness: { value: 0.2 },
+			},
+			vertexShader: waveVertexShader,
+			fragmentShader: waveFragmentShader,
+		}),
+		[],
+	);
 
 	useFrame((state) => {
 		// Skip expensive operations when hero is not visible
 		if (!isVisible) return;
-
-		frameCountRef.current++;
 
 		if (lightRef.current) {
 			// Convert normalized mouse coords to viewport coordinates
@@ -47,39 +92,14 @@ function LitBackground() {
 			textGroupRef.current.lookAt(camera.position);
 		}
 
-		// Make the plane always face the camera
+		// Make the plane always face the camera and update shader time
 		if (meshRef.current) {
 			meshRef.current.lookAt(camera.position);
 
-			// Only update vertex positions every 2 frames for better performance
-			if (frameCountRef.current % 2 === 0) {
-				// Animate the wavy displacement
-				const geometry = meshRef.current.geometry;
-				const positionAttribute = geometry.attributes.position;
-				const time = state.clock.elapsedTime;
-
-				if (!positionAttribute) {
-					return;
-				}
-
-				for (let i = 0; i < positionAttribute.count; i++) {
-					const x = positionAttribute.getX(i);
-					const y = positionAttribute.getY(i);
-
-					// Create wave effect using sine waves
-					const wave1 = Math.sin(x * 0.5 + time * 0.5) * 0.1;
-					const wave2 = Math.sin(y * 0.5 + time * 0.3) * 0.1;
-					const z = wave1 + wave2;
-
-					positionAttribute.setZ(i, z);
-				}
-
-				positionAttribute.needsUpdate = true;
-			}
-
-			// Only recompute normals every 4 frames (expensive operation)
-			if (frameCountRef.current % 4 === 0) {
-				meshRef.current.geometry.computeVertexNormals();
+			// Update shader time uniform (GPU handles the animation)
+			const material = meshRef.current.material as THREE.ShaderMaterial;
+			if (material.uniforms?.uTime) {
+				material.uniforms.uTime.value = state.clock.elapsedTime;
 			}
 		}
 	});
@@ -91,7 +111,12 @@ function LitBackground() {
 				<planeGeometry
 					args={[viewport.width * 1.5, viewport.height * 1.5, 40, 40]}
 				/>
-				<meshStandardMaterial color="#1a1a1a" roughness={0.8} metalness={0.2} />
+				<shaderMaterial
+					attach="material"
+					uniforms={shaderMaterial.uniforms}
+					vertexShader={shaderMaterial.vertexShader}
+					fragmentShader={shaderMaterial.fragmentShader}
+				/>
 			</mesh>
 
 			{/* 3D Text that reacts to light */}
@@ -110,11 +135,11 @@ function LitBackground() {
 					<meshBasicMaterial color="#000000" />
 				</Text>
 
-				{/* Create depth by layering multiple text instances */}
-				{[...Array(30)].map((_, i) => (
+				{/* Create depth by layering multiple text instances - reduced from 30 to 15 for performance */}
+				{[...Array(15)].map((_, i) => (
 					<Text
 						key={i.toString()}
-						position={[0, 0, -i * 0.025]}
+						position={[0, 0, -i * 0.05]}
 						fontSize={1.8}
 						color="#0a0a0a"
 						anchorX="center"
@@ -180,6 +205,11 @@ export function HeroCanvas({ className }: HeroCanvasProps) {
 				dpr={[1, 2]} // Limit pixel ratio for better performance
 				performance={{ min: 0.5 }} // Allow frame rate to drop if needed
 				frameloop="always" // Ensure consistent frame loop
+				gl={{
+					antialias: true,
+					alpha: false,
+					powerPreference: "high-performance",
+				}}
 			>
 				<Suspense fallback={null}>
 					<LitBackground />
