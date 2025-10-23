@@ -11,6 +11,7 @@ import { useHeroVisibility } from "../motion/HeroParallax";
 const waveVertexShader = `
   uniform float uTime;
   varying vec3 vNormal;
+  varying vec3 vPosition;
 
   void main() {
     vec3 pos = position;
@@ -20,7 +21,13 @@ const waveVertexShader = `
     float wave2 = sin(pos.y * 0.5 + uTime * 0.3) * 0.1;
     pos.z += wave1 + wave2;
 
-    vNormal = normalize(normalMatrix * normal);
+    // Calculate normal based on wave derivatives for proper lighting
+    float dx = cos(pos.x * 0.5 + uTime * 0.5) * 0.05;
+    float dy = cos(pos.y * 0.5 + uTime * 0.3) * 0.05;
+    vec3 computedNormal = normalize(vec3(-dx, -dy, 1.0));
+
+    vNormal = normalize(normalMatrix * computedNormal);
+    vPosition = (modelViewMatrix * vec4(pos, 1.0)).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
   }
 `;
@@ -29,14 +36,36 @@ const waveFragmentShader = `
   uniform vec3 uColor;
   uniform float uRoughness;
   uniform float uMetalness;
+  uniform vec3 uLightPosition;
+  uniform vec3 uLightColor;
+  uniform float uLightIntensity;
   varying vec3 vNormal;
+  varying vec3 vPosition;
 
   void main() {
-    // Simple lighting calculation
-    vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+    // Calculate light direction and distance
+    vec3 lightDir = uLightPosition - vPosition;
+    float distance = length(lightDir);
+    lightDir = normalize(lightDir);
+
+    // Attenuation (light falloff) - much stronger falloff
+    float attenuation = uLightIntensity / (1.0 + 0.1 * distance + 0.05 * distance * distance);
+
+    // Diffuse lighting - very subtle
     float diff = max(dot(vNormal, lightDir), 0.0);
-    vec3 color = uColor * (0.3 + diff * 0.7);
-    gl_FragColor = vec4(color, 1.0);
+
+    // Specular lighting - very subtle
+    vec3 viewDir = normalize(-vPosition);
+    vec3 halfDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(vNormal, halfDir), 0.0), 32.0);
+
+    // Combine lighting - much more subtle effect
+    vec3 ambient = uColor * 0.95;  // Mostly base color
+    vec3 diffuse = uColor * diff * uLightColor * attenuation * 0.15;  // Very subtle diffuse
+    vec3 specular = uLightColor * spec * attenuation * 0.05 * (1.0 - uRoughness);  // Very subtle specular
+
+    vec3 finalColor = ambient + diffuse + specular;
+    gl_FragColor = vec4(finalColor, 1.0);
   }
 `;
 
@@ -55,6 +84,9 @@ function LitBackground() {
 				uColor: { value: new THREE.Color("#1a1a1a") },
 				uRoughness: { value: 0.8 },
 				uMetalness: { value: 0.2 },
+				uLightPosition: { value: new THREE.Vector3(0, 0, 2) },
+				uLightColor: { value: new THREE.Color("#ffffff") },
+				uLightIntensity: { value: 25 },
 			},
 			vertexShader: waveVertexShader,
 			fragmentShader: waveFragmentShader,
@@ -66,20 +98,18 @@ function LitBackground() {
 		// Skip expensive operations when hero is not visible
 		if (!isVisible) return;
 
+		// Convert normalized mouse coords to full viewport range
+		const x = state.mouse.x * viewport.width;
+		const y = state.mouse.y * viewport.height;
+
+		// Change color based on position - cooler palette (blue to cyan to purple)
+		const hue = 180 + ((state.mouse.x + 1) / 2) * 90; // 180-270 degrees
+		const saturation = 60 + ((state.mouse.y + 1) / 2) * 40; // 60-100%
+		const lightness = 65; // Slightly brighter for cool colors
+
 		if (lightRef.current) {
-			// Convert normalized mouse coords to viewport coordinates
-			const x = (state.mouse.x * viewport.width) / 2;
-			const y = (state.mouse.y * viewport.height) / 2;
 			// Position light slightly in front of the plane
 			lightRef.current.position.set(x, y, 2);
-
-			// Change color based on position - cooler palette (blue to cyan to purple)
-			// Map x position to hue range: 180° (cyan) to 270° (blue/purple)
-			const hue = 180 + ((state.mouse.x + 1) / 2) * 90; // 180-270 degrees
-			// Map y position to saturation
-			const saturation = 60 + ((state.mouse.y + 1) / 2) * 40; // 60-100%
-			const lightness = 65; // Slightly brighter for cool colors
-
 			lightRef.current.color.setHSL(
 				hue / 360,
 				saturation / 100,
@@ -92,14 +122,27 @@ function LitBackground() {
 			textGroupRef.current.lookAt(camera.position);
 		}
 
-		// Make the plane always face the camera and update shader time
+		// Make the plane always face the camera and update shader uniforms
 		if (meshRef.current) {
 			meshRef.current.lookAt(camera.position);
 
-			// Update shader time uniform (GPU handles the animation)
+			// Update shader uniforms (GPU handles the animation and lighting)
 			const material = meshRef.current.material as THREE.ShaderMaterial;
-			if (material.uniforms?.uTime) {
-				material.uniforms.uTime.value = state.clock.elapsedTime;
+			if (material.uniforms) {
+				if (material.uniforms.uTime) {
+					material.uniforms.uTime.value = state.clock.elapsedTime;
+				}
+				// Update light position and color in shader
+				if (material.uniforms.uLightPosition) {
+					material.uniforms.uLightPosition.value.set(x, y, 2);
+				}
+				if (material.uniforms.uLightColor) {
+					material.uniforms.uLightColor.value.setHSL(
+						hue / 360,
+						saturation / 100,
+						lightness / 100,
+					);
+				}
 			}
 		}
 	});
