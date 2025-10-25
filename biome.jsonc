@@ -5,6 +5,9 @@
 		"clientKind": "git",
 		"useIgnoreFile": true
 	},
+	"formatter": {
+		"formatWithErrors": true
+	},
 	"linter": {
 		"rules": {
 			"suspicious": {

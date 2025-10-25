@@ -30,10 +30,7 @@ export default async function BlogLayout({
 					</Navbar>
 					{children}
 					<Footer>
-						<p>
-							© {new Date().getFullYear()} Superset. All rights
-							reserved.
-						</p>
+						<p>© {new Date().getFullYear()} Superset. All rights reserved.</p>
 					</Footer>
 				</Layout>
 			</body>

@@ -175,7 +175,12 @@ function LitBackground() {
 	const { viewport, camera } = useThree();
 	const isVisible = useHeroVisibility();
 	const [glareStartTime, setGlareStartTime] = useState<number | null>(null);
-	const glarePropertiesRef = useRef({ isActive: false, lightX: 0, lightY: 0, intensity: 0 });
+	const glarePropertiesRef = useRef({
+		isActive: false,
+		lightX: 0,
+		lightY: 0,
+		intensity: 0,
+	});
 
 	// Start glare animation cycle on mount
 	useEffect(() => {

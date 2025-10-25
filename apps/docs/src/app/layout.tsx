@@ -19,9 +19,7 @@ const navbar = <Navbar logo={<strong>Superset</strong>} />;
 
 const footer = (
 	<Footer>
-		<p>
-			© {new Date().getFullYear()} Superset. All rights reserved.
-		</p>
+		<p>© {new Date().getFullYear()} Superset. All rights reserved.</p>
 	</Footer>
 );
 
