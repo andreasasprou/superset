@@ -1,7 +1,7 @@
-import { config } from "dotenv";
-import { defineConfig } from "drizzle-kit";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { config } from "dotenv";
+import { defineConfig } from "drizzle-kit";
 
 // Get the directory of this config file
 const configDir = path.dirname(fileURLToPath(import.meta.url));

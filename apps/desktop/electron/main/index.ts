@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, screen, shell } from "electron";
 import terminalManager from "./terminal";
 import { update } from "./update";
 
@@ -48,9 +48,15 @@ const preload = path.join(__dirname, "../preload/index.mjs");
 const indexHtml = path.join(RENDERER_DIST, "index.html");
 
 async function createWindow() {
+	const primaryDisplay = screen.getPrimaryDisplay();
+	const { width, height } = primaryDisplay.workAreaSize;
+
 	win = new BrowserWindow({
 		title: "Main window",
 		icon: path.join(process.env.VITE_PUBLIC, "favicon.ico"),
+		width,
+		height,
+		frame: false,
 		webPreferences: {
 			preload,
 			// Warning: Enable nodeIntegration and disable contextIsolation is not secure in production
@@ -68,8 +74,6 @@ async function createWindow() {
 	if (VITE_DEV_SERVER_URL) {
 		// #298
 		win.loadURL(VITE_DEV_SERVER_URL);
-		// Open devTool if the app is not packaged
-		win.webContents.openDevTools();
 	} else {
 		win.loadFile(indexHtml);
 	}

@@ -272,7 +272,7 @@ export default function TerminalComponent({
 	return (
 		<div
 			ref={terminalRef}
-			className={`h-full w-full p-2 transition-opacity duration-200 text-start ${hidden ? "opacity-0" : "opacity-100 delay-300"}`}
+			className={`h-full w-full transition-opacity duration-200 text-start ${hidden ? "opacity-0" : "opacity-100 delay-300"}`}
 		/>
 	);
 }
