@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 
-import { Sidebar } from "renderer/components/Sidebar";
 import TerminalLayout from "renderer/components/TerminalLayout";
-import { TopBar } from "renderer/components/TopBar";
 import type { Workspace } from "shared/types";
+import { Sidebar } from "./components/Sidebar";
+import { TopBar } from "./components/TopBar";
 
 export function MainScreen() {
 	const [isSidebarOpen, setIsSidebarOpen] = useState(true);

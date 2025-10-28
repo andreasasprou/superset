@@ -5,13 +5,13 @@ import {
 	PanelLeftOpen,
 	Plus,
 } from "lucide-react";
-import { Button } from "./ui/button";
+import { Button } from "renderer/components/ui/button";
 import {
 	Tooltip,
 	TooltipContent,
 	TooltipProvider,
 	TooltipTrigger,
-} from "./ui/tooltip";
+} from "renderer/components/ui/tooltip";
 
 interface TopBarProps {
 	isSidebarOpen: boolean;
