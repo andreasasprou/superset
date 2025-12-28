@@ -9,7 +9,7 @@ import { SUPERSET_HOME_DIR } from "../../app-environment";
 import type {
 	CreatePersistentSessionParams,
 	PersistenceBackend,
-	TmuxError,
+	PersistenceErrorCode,
 } from "./types";
 
 const exec = promisify(execCallback);
@@ -199,7 +199,7 @@ exec ${shellQuote(shell)} ${shellArgs.map(shellQuote).join(" ")}
 		);
 	}
 
-	classifyError(error: unknown): TmuxError {
+	classifyError(error: unknown): PersistenceErrorCode {
 		const msg =
 			error instanceof Error ? error.message.toLowerCase() : String(error);
 		if (msg.includes("no server") || msg.includes("connection refused")) {
@@ -212,7 +212,7 @@ exec ${shellQuote(shell)} ${shellArgs.map(shellQuote).join(" ")}
 			return "SOCKET_MISSING";
 		}
 		if (msg.includes("not found") && msg.includes("tmux")) {
-			return "TMUX_NOT_FOUND";
+			return "BACKEND_NOT_FOUND";
 		}
 		return "ATTACH_FAILED";
 	}

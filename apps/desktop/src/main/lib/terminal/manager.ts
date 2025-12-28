@@ -2,33 +2,22 @@ import { EventEmitter } from "node:events";
 import os from "node:os";
 import { track } from "main/lib/analytics";
 import { HistoryReader, HistoryWriter } from "../terminal-history";
-import { parseCwd } from "shared/parse-cwd";
-import {
-	containsClearScrollbackSequence,
-	extractContentAfterClear,
-} from "../terminal-escape-filter";
 import {
 	buildTerminalEnv,
 	FALLBACK_SHELL,
 	getDefaultShell,
 	SHELL_CRASH_THRESHOLD_MS,
 } from "./env";
-import {
-	getSessionName,
-	processPersistence,
-	TmuxBackend,
-} from "./persistence/manager";
-import {
-	SessionLifecycle,
-	type SessionLifecycleEvents,
-} from "./persistence/session-lifecycle";
-import type { SessionState, TmuxError } from "./persistence/types";
+import { getSessionName, processPersistence } from "./persistence/manager";
+import type { SessionLifecycle } from "./persistence/session-lifecycle";
+import type { PersistenceErrorCode, SessionState } from "./persistence/types";
 import { portManager } from "./port-manager";
 import {
 	closeSessionHistory,
 	closeSessionHistoryForDetach,
 	createSession,
 	flushSession,
+	processTerminalChunk,
 	reinitializeHistory,
 	setupDataHandler,
 } from "./session";
@@ -45,7 +34,6 @@ export class TerminalManager extends EventEmitter {
 	private sessions = new Map<string, TerminalSession>();
 	private pendingSessions = new Map<string, Promise<SessionResult>>();
 	private lifecycles = new Map<string, SessionLifecycle>();
-	private tmuxBackend = new TmuxBackend();
 	private osc7Buffers = new Map<string, string>();
 
 	async createOrAttach(params: CreateSessionParams): Promise<SessionResult> {
@@ -109,11 +97,7 @@ export class TerminalManager extends EventEmitter {
 					const backendScrollback =
 						await this.captureScrollbackBounded(sessionName);
 
-					const lifecycle = this.getOrCreateLifecycle(
-						paneId,
-						sessionName,
-						params,
-					);
+					const lifecycle = this.getOrCreateLifecycle(paneId, sessionName);
 					const attached = await lifecycle.ensureAttached(cols, rows);
 
 					if (attached && lifecycle.getPty()) {
@@ -159,11 +143,7 @@ export class TerminalManager extends EventEmitter {
 					}),
 				});
 
-				const lifecycle = this.getOrCreateLifecycle(
-					paneId,
-					sessionName,
-					params,
-				);
+				const lifecycle = this.getOrCreateLifecycle(paneId, sessionName);
 				const attached = await lifecycle.ensureAttached(cols, rows);
 
 				if (attached && lifecycle.getPty()) {
@@ -213,20 +193,62 @@ export class TerminalManager extends EventEmitter {
 	private getOrCreateLifecycle(
 		paneId: string,
 		sessionName: string,
-		params: CreateSessionParams,
 	): SessionLifecycle {
 		let lifecycle = this.lifecycles.get(paneId);
 		if (!lifecycle) {
-			lifecycle = new SessionLifecycle(sessionName, this.tmuxBackend, {
+			lifecycle = processPersistence.createLifecycle(sessionName, {
 				onStateChange: (state, prev) =>
 					this.handleLifecycleStateChange(paneId, state, prev),
-				onData: (data) => this.handleLifecycleData(paneId, data),
 				onError: (error, message) =>
 					this.handleLifecycleError(paneId, error, message),
 			});
 			this.lifecycles.set(paneId, lifecycle);
 		}
 		return lifecycle;
+	}
+
+	/**
+	 * Unified cleanup for terminal sessions.
+	 * Handles history, ports, osc7 buffers, and lifecycles with identity guards.
+	 */
+	private async cleanupSession(
+		paneId: string,
+		session: TerminalSession,
+		exitCode?: number,
+	): Promise<void> {
+		// Clear any existing timeout (make idempotent)
+		if (session.cleanupTimeout) {
+			clearTimeout(session.cleanupTimeout);
+			session.cleanupTimeout = undefined;
+		}
+
+		// Snapshot lifecycle before any await
+		const lifecycle = this.lifecycles.get(paneId);
+
+		flushSession(session); // Sync - disposes dataBatcher
+		this.osc7Buffers.delete(paneId);
+
+		await closeSessionHistory(session, exitCode);
+
+		// Identity guard after await - abort if session was replaced
+		if (this.sessions.get(paneId) !== session) {
+			return;
+		}
+
+		portManager.removePortsForPane(paneId);
+
+		// Only delete lifecycle if it's still the same one
+		if (this.lifecycles.get(paneId) === lifecycle) {
+			this.lifecycles.delete(paneId);
+		}
+
+		// Delayed session cleanup with identity guard
+		session.cleanupTimeout = setTimeout(() => {
+			if (this.sessions.get(paneId) === session) {
+				this.sessions.delete(paneId);
+			}
+		}, 5000);
+		session.cleanupTimeout.unref();
 	}
 
 	private handleLifecycleStateChange(
@@ -256,6 +278,7 @@ export class TerminalManager extends EventEmitter {
 
 		if (state === "closed" && session) {
 			session.isAlive = false;
+			void this.cleanupSession(paneId, session, 0); // Fire-and-forget
 			this.emit(`exit:${paneId}`, 0, undefined);
 		}
 	}
@@ -264,32 +287,19 @@ export class TerminalManager extends EventEmitter {
 		const session = this.sessions.get(paneId);
 		if (!session) return;
 
-		let dataToStore = data;
-
-		if (containsClearScrollbackSequence(data)) {
-			session.scrollback = "";
-			reinitializeHistory(session).catch(() => {});
-			dataToStore = extractContentAfterClear(data);
-		}
-
-		session.scrollback += dataToStore;
-		session.historyWriter?.write(dataToStore);
-
-		const osc7Buffer = (this.osc7Buffers.get(paneId) ?? "") + data;
-		this.osc7Buffers.set(paneId, osc7Buffer.slice(-OSC7_BUFFER_SIZE));
-		const newCwd = parseCwd(osc7Buffer);
-		if (newCwd && newCwd !== session.cwd) {
-			session.cwd = newCwd;
-			session.historyWriter?.updateCwd(newCwd);
-		}
-
-		portManager.scanOutput(dataToStore, paneId, session.workspaceId);
-		session.dataBatcher.write(data);
+		const osc7Buffer = this.osc7Buffers.get(paneId) ?? "";
+		const { newOsc7Buffer } = processTerminalChunk(
+			session,
+			data,
+			osc7Buffer,
+			() => reinitializeHistory(session),
+		);
+		this.osc7Buffers.set(paneId, newOsc7Buffer);
 	}
 
 	private handleLifecycleError(
 		paneId: string,
-		error: TmuxError,
+		error: PersistenceErrorCode,
 		message: string,
 	): void {
 		console.warn(
@@ -317,15 +327,7 @@ export class TerminalManager extends EventEmitter {
 		const cols = params.cols ?? 80;
 		const rows = params.rows ?? 24;
 
-		const historyWriter = new HistoryWriter(
-			workspaceId,
-			paneId,
-			cwd,
-			cols,
-			rows,
-		);
-		await historyWriter.init(opts.scrollback || undefined);
-
+		// 1. Create session object first (without historyWriter)
 		const session: TerminalSession = {
 			pty: ptyProcess,
 			paneId,
@@ -344,10 +346,24 @@ export class TerminalManager extends EventEmitter {
 			startTime: Date.now(),
 			usedFallback: false,
 			isPersistentBackend: opts.isPersistentBackend,
-			historyWriter,
 		};
 
+		// 2. Store session BEFORE async history init (so data handler can find it)
 		this.sessions.set(paneId, session);
+
+		// 3. Init history writer
+		const historyWriter = new HistoryWriter(
+			workspaceId,
+			paneId,
+			cwd,
+			cols,
+			rows,
+		);
+		await historyWriter.init(opts.scrollback || undefined);
+		session.historyWriter = historyWriter;
+
+		// 4. NOW wire data handler (will flush any buffered data)
+		lifecycle.setDataHandler((data) => this.handleLifecycleData(paneId, data));
 
 		if (opts.wasRecovered && opts.scrollback) {
 			portManager.scanOutput(opts.scrollback, paneId, workspaceId);
@@ -502,6 +518,12 @@ export class TerminalManager extends EventEmitter {
 					`[TerminalManager] Shell "${session.shell}" exited with code ${exitCode} after ${sessionDuration}ms, retrying with fallback shell "${FALLBACK_SHELL}"`,
 				);
 
+				// Clear any existing timeout before restart
+				if (session.cleanupTimeout) {
+					clearTimeout(session.cleanupTimeout);
+					session.cleanupTimeout = undefined;
+				}
+
 				await closeSessionHistory(session, exitCode);
 				this.sessions.delete(paneId);
 
@@ -607,7 +629,7 @@ export class TerminalManager extends EventEmitter {
 	}
 
 	signal(params: { paneId: string; signal?: string }): void {
-		const { paneId, signal = "SIGTERM" } = params;
+		const { paneId, signal = "SIGINT" } = params;
 		const session = this.sessions.get(paneId);
 
 		if (!session || !session.isAlive) {
@@ -617,7 +639,18 @@ export class TerminalManager extends EventEmitter {
 			return;
 		}
 
-		session.pty.kill(signal);
+		if (session.isPersistentBackend) {
+			if (signal === "SIGINT") {
+				// C-c is the only signal that maps cleanly to tmux
+				const lifecycle = this.lifecycles.get(paneId);
+				lifecycle?.write("\x03");
+			} else {
+				// SIGTERM/SIGKILL → kill the session entirely
+				void this.kill({ paneId });
+			}
+		} else {
+			session.pty.kill(signal);
+		}
 		session.lastActive = Date.now();
 	}
 
@@ -638,23 +671,31 @@ export class TerminalManager extends EventEmitter {
 		}
 
 		const lifecycle = this.lifecycles.get(paneId);
-		if (lifecycle) {
-			lifecycle.close();
-			this.lifecycles.delete(paneId);
-		}
 
 		if (session.isPersistentBackend) {
+			// Persistent: detach → delete lifecycle → kill tmux → manual cleanup
+			if (lifecycle) {
+				await lifecycle.detach();
+				this.lifecycles.delete(paneId); // Delete immediately to prevent writes/resizes
+			}
+
+			// Kill underlying tmux session
 			const sessionName = getSessionName(session.workspaceId, paneId);
 			await processPersistence.killSession(sessionName).catch(() => {});
-		}
 
-		if (session.isAlive && !session.isExpectedDetach) {
-			session.pty.kill();
+			// Manual cleanup + emit (single authoritative path)
+			session.isAlive = false;
+			await this.cleanupSession(paneId, session);
+			this.emit(`exit:${paneId}`, 0, undefined);
 		} else {
-			this.osc7Buffers.delete(paneId);
-			portManager.removePortsForPane(paneId);
-			await closeSessionHistory(session);
-			this.sessions.delete(paneId);
+			// Non-persistent: close lifecycle, kill PTY, let setupExitHandler handle cleanup
+			if (lifecycle) {
+				await lifecycle.close();
+				this.lifecycles.delete(paneId);
+			}
+			if (session.isAlive) {
+				session.pty.kill();
+			}
 		}
 	}
 
@@ -733,16 +774,52 @@ export class TerminalManager extends EventEmitter {
 			return { killed: 0, failed: 0 };
 		}
 
-		const results = await Promise.all(
-			sessionsToKill.map(([paneId, session]) =>
+		// Separate persistent vs non-persistent sessions
+		const persistentSessions = sessionsToKill.filter(
+			([, s]) => s.isPersistentBackend,
+		);
+		const nonPersistentSessions = sessionsToKill.filter(
+			([, s]) => !s.isPersistentBackend,
+		);
+
+		let killed = 0;
+
+		// --- Handle persistent sessions: detach → kill tmux → manual cleanup ---
+
+		// 1. Detach all persistent lifecycles (stops reconnect, no "closed" events)
+		for (const [paneId] of persistentSessions) {
+			const lifecycle = this.lifecycles.get(paneId);
+			if (lifecycle) {
+				await lifecycle.detach();
+				this.lifecycles.delete(paneId); // Delete immediately
+			}
+		}
+
+		// 2. Kill all tmux sessions
+		await processPersistence.killByWorkspace(workspaceId);
+
+		// 3. Manual cleanup + emit for persistent sessions
+		for (const [paneId, session] of persistentSessions) {
+			try {
+				session.isAlive = false;
+				await this.cleanupSession(paneId, session);
+				this.emit(`exit:${paneId}`, 0, undefined);
+				killed++;
+			} catch {
+				// Count as failed but continue
+			}
+		}
+
+		// --- Handle non-persistent sessions: use killSessionWithTimeout ---
+		const nonPersistentResults = await Promise.all(
+			nonPersistentSessions.map(([paneId, session]) =>
 				this.killSessionWithTimeout(paneId, session),
 			),
 		);
+		killed += nonPersistentResults.filter(Boolean).length;
 
-		await processPersistence.killByWorkspace(workspaceId);
-
-		const killed = results.filter(Boolean).length;
-		return { killed, failed: results.length - killed };
+		const failed = sessionsToKill.length - killed;
+		return { killed, failed };
 	}
 
 	private async killSessionWithTimeout(

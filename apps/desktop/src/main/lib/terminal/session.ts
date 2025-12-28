@@ -169,44 +169,67 @@ export async function createSession(
 
 const OSC7_BUFFER_SIZE = 4096;
 
+/**
+ * Process a chunk of terminal data - shared between persistent and non-persistent sessions.
+ * Handles scrollback, history writing, CWD tracking, and port scanning.
+ */
+export function processTerminalChunk(
+	session: TerminalSession,
+	data: string,
+	osc7Buffer: string,
+	onClearScrollback: () => Promise<void>,
+): { newOsc7Buffer: string } {
+	let dataToStore = data;
+
+	if (containsClearScrollbackSequence(data)) {
+		session.scrollback = "";
+		void onClearScrollback().catch(() => {});
+		dataToStore = extractContentAfterClear(data);
+	}
+
+	session.scrollback += dataToStore;
+	session.historyWriter?.write(dataToStore);
+
+	const newOsc7Buffer = (osc7Buffer + data).slice(-OSC7_BUFFER_SIZE);
+	const newCwd = parseCwd(newOsc7Buffer);
+	if (newCwd && newCwd !== session.cwd) {
+		session.cwd = newCwd;
+		session.historyWriter?.updateCwd(newCwd);
+	}
+
+	portManager.scanOutput(dataToStore, session.paneId, session.workspaceId);
+	session.dataBatcher.write(data);
+
+	return { newOsc7Buffer };
+}
+
 export function setupDataHandler(
 	session: TerminalSession,
 	initialCommands: string[] | undefined,
 	wasRecovered: boolean,
 	onHistoryReinit: () => Promise<void>,
 ): void {
-	const shouldRunCommands =
-		!wasRecovered && initialCommands && initialCommands.length > 0;
+	// Strict boolean - ensure initialCommands is defined and non-empty
+	const shouldRunCommands: boolean =
+		!wasRecovered &&
+		initialCommands !== undefined &&
+		initialCommands.length > 0;
 	let commandsSent = false;
 	let osc7Buffer = "";
 
 	session.pty.onData((data) => {
-		let dataToStore = data;
-
-		if (containsClearScrollbackSequence(data)) {
-			session.scrollback = "";
-			onHistoryReinit().catch(() => {});
-			dataToStore = extractContentAfterClear(data);
-		}
-
-		session.scrollback += dataToStore;
-		session.historyWriter?.write(dataToStore);
-
-		osc7Buffer = (osc7Buffer + data).slice(-OSC7_BUFFER_SIZE);
-		const newCwd = parseCwd(osc7Buffer);
-		if (newCwd && newCwd !== session.cwd) {
-			session.cwd = newCwd;
-			session.historyWriter?.updateCwd(newCwd);
-		}
-
-		portManager.scanOutput(dataToStore, session.paneId, session.workspaceId);
-
-		session.dataBatcher.write(data);
+		const result = processTerminalChunk(
+			session,
+			data,
+			osc7Buffer,
+			onHistoryReinit,
+		);
+		osc7Buffer = result.newOsc7Buffer;
 
 		if (shouldRunCommands && !commandsSent) {
 			commandsSent = true;
 			setTimeout(() => {
-				if (session.isAlive) {
+				if (session.isAlive && initialCommands) {
 					const cmdString = `${initialCommands.join(" && ")}\n`;
 					session.pty.write(cmdString);
 				}

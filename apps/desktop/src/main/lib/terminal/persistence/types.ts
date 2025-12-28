@@ -1,11 +1,11 @@
 import type * as pty from "node-pty";
 
-/** Error types from tmux operations */
-export type TmuxError =
+/** Error codes from persistence backend operations */
+export type PersistenceErrorCode =
 	| "NO_SERVER"
 	| "NO_SESSION"
 	| "SOCKET_MISSING"
-	| "TMUX_NOT_FOUND"
+	| "BACKEND_NOT_FOUND"
 	| "ATTACH_FAILED";
 
 /** Session lifecycle states for persistent terminals */
@@ -37,6 +37,8 @@ export interface PersistenceBackend {
 	killSession(name: string): Promise<void>;
 
 	captureScrollback(name: string): Promise<string>;
+
+	classifyError(error: unknown): PersistenceErrorCode;
 
 	getSessionLastActivity?(name: string): Promise<number | null>;
 	cleanupOrphanedScripts?(): Promise<void>;

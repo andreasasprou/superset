@@ -3,6 +3,10 @@ import { join } from "node:path";
 import type * as pty from "node-pty";
 import { SUPERSET_HOME_DIR } from "../../app-environment";
 import {
+	SessionLifecycle,
+	type SessionLifecycleEvents,
+} from "./session-lifecycle";
+import {
 	getSessionName,
 	getWorkspacePrefix,
 	TmuxBackend,
@@ -150,7 +154,21 @@ set -ga terminal-overrides ",xterm-256color:Tc"
 			console.warn("[ProcessPersistence] Orphan cleanup failed:", error);
 		}
 	}
+
+	/**
+	 * Create a SessionLifecycle for managing a persistent terminal session.
+	 * This is the only way TerminalManager should interact with the persistence backend.
+	 */
+	createLifecycle(
+		sessionName: string,
+		events: SessionLifecycleEvents,
+	): SessionLifecycle {
+		if (!this.backend) {
+			throw new Error("No persistence backend available");
+		}
+		return new SessionLifecycle(sessionName, this.backend, events);
+	}
 }
 
 export const processPersistence = new ProcessPersistence();
-export { getSessionName, getWorkspacePrefix, TmuxBackend };
+export { getSessionName, getWorkspacePrefix };

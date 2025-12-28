@@ -1,14 +1,17 @@
 import type * as pty from "node-pty";
-import type { SessionState, TmuxError } from "./types";
-import type { TmuxBackend } from "./tmux-backend";
+import type {
+	PersistenceBackend,
+	PersistenceErrorCode,
+	SessionState,
+} from "./types";
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS_MS = [100, 500, 1000];
+const MAX_BUFFER_BYTES = 1024 * 1024; // 1MB max buffer
 
 export interface SessionLifecycleEvents {
 	onStateChange: (state: SessionState, prevState: SessionState) => void;
-	onData: (data: string) => void;
-	onError: (error: TmuxError, message: string) => void;
+	onError: (error: PersistenceErrorCode, message: string) => void;
 }
 
 export class SessionLifecycle {
@@ -20,9 +23,14 @@ export class SessionLifecycle {
 	private disposed = false;
 	private isDetaching = false;
 
+	// Data buffering until handler is set
+	private dataBuffer: string[] = [];
+	private dataBufferBytes = 0;
+	private dataHandler: ((data: string) => void) | null = null;
+
 	constructor(
 		private readonly sessionName: string,
-		private readonly backend: TmuxBackend,
+		private readonly backend: PersistenceBackend,
 		private readonly events: SessionLifecycleEvents,
 	) {}
 
@@ -105,8 +113,18 @@ export class SessionLifecycle {
 		if (!this.ptyProcess) return;
 
 		this.ptyProcess.onData((data) => {
-			if (!this.disposed) {
-				this.events.onData(data);
+			if (this.disposed) return;
+
+			if (this.dataHandler) {
+				this.dataHandler(data);
+			} else {
+				// Buffer data until handler is set, with byte limit
+				const chunkBytes = Buffer.byteLength(data, "utf8");
+				if (this.dataBufferBytes + chunkBytes <= MAX_BUFFER_BYTES) {
+					this.dataBuffer.push(data);
+					this.dataBufferBytes += chunkBytes;
+				}
+				// Drop if buffer would exceed limit - bounded memory
 			}
 		});
 
@@ -159,6 +177,20 @@ export class SessionLifecycle {
 		return this.state === "connected" && this.ptyProcess !== null;
 	}
 
+	/**
+	 * Set the data handler and flush any buffered data.
+	 * Call this after the session is stored so data isn't dropped.
+	 */
+	setDataHandler(handler: (data: string) => void): void {
+		this.dataHandler = handler;
+		// Flush buffered data
+		for (const chunk of this.dataBuffer) {
+			handler(chunk);
+		}
+		this.dataBuffer = [];
+		this.dataBufferBytes = 0;
+	}
+
 	resize(cols: number, rows: number): void {
 		this.lastDimensions = { cols, rows };
 		if (this.state === "connected" && this.ptyProcess) {
@@ -173,6 +205,10 @@ export class SessionLifecycle {
 
 		this.isDetaching = true;
 
+		// Clear buffer to release memory
+		this.dataBuffer = [];
+		this.dataBufferBytes = 0;
+
 		if (this.ptyProcess) {
 			try {
 				this.ptyProcess.kill();
@@ -184,6 +220,11 @@ export class SessionLifecycle {
 
 	async close(): Promise<void> {
 		this.disposed = true;
+
+		// Clear buffer to release memory
+		this.dataBuffer = [];
+		this.dataBufferBytes = 0;
+
 		this.transition("closed");
 
 		if (this.ptyProcess) {
