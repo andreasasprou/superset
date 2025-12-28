@@ -6,7 +6,7 @@ import path from "node:path";
 import { app, BrowserWindow, dialog } from "electron";
 import { settings } from "@superset/local-db";
 import { makeAppSetup } from "lib/electron-app/factories/app/setup";
-import { PROTOCOL_SCHEME } from "shared/constants";
+import { PROTOCOL_SCHEME, DEFAULT_CONFIRM_ON_QUIT } from "shared/constants";
 import { setupAgentHooks } from "./lib/agent-setup";
 import { posthog } from "./lib/analytics";
 import { initAppState } from "./lib/app-state";
@@ -92,7 +92,12 @@ app.on("open-url", async (event, url) => {
 	await processDeepLink(url);
 });
 
-type QuitState = "idle" | "confirming" | "confirmed" | "cleaning" | "ready-to-quit";
+type QuitState =
+	| "idle"
+	| "confirming"
+	| "confirmed"
+	| "cleaning"
+	| "ready-to-quit";
 let quitState: QuitState = "idle";
 let isQuitting = false;
 let skipConfirmation = false;
@@ -103,11 +108,9 @@ let skipConfirmation = false;
 function getConfirmOnQuitSetting(): boolean {
 	try {
 		const row = localDb.select().from(settings).get();
-		// Default to true if not set
-		return row?.confirmOnQuit ?? true;
+		return row?.confirmOnQuit ?? DEFAULT_CONFIRM_ON_QUIT;
 	} catch {
-		// If we can't read the setting, default to showing the dialog
-		return true;
+		return DEFAULT_CONFIRM_ON_QUIT;
 	}
 }
 
