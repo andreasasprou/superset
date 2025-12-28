@@ -335,6 +335,24 @@ export class TerminalManager extends EventEmitter {
 		const cols = params.cols ?? 80;
 		const rows = params.rows ?? 24;
 
+		// If recovering but tmux capture failed/timed out, fall back to disk backup
+		// This prevents truncating the safety-net scrollback when tmux has issues
+		let effectiveScrollback = opts.scrollback;
+		if (opts.wasRecovered && !opts.scrollback) {
+			const diskHistory = await historyReader.read();
+			if (diskHistory.scrollback) {
+				const MAX_SCROLLBACK_CHARS = 500_000;
+				effectiveScrollback = sanitizeTerminalScrollback(
+					diskHistory.scrollback.length > MAX_SCROLLBACK_CHARS
+						? diskHistory.scrollback.slice(-MAX_SCROLLBACK_CHARS)
+						: diskHistory.scrollback,
+				);
+				console.log(
+					`[TerminalManager] tmux capture failed, recovered ${effectiveScrollback.length} chars from disk`,
+				);
+			}
+		}
+
 		// 1. Create session object first (without historyWriter)
 		const session: TerminalSession = {
 			pty: ptyProcess,
@@ -344,7 +362,7 @@ export class TerminalManager extends EventEmitter {
 			cols,
 			rows,
 			lastActive: Date.now(),
-			scrollback: opts.scrollback,
+			scrollback: effectiveScrollback,
 			isAlive: true,
 			wasRecovered: opts.wasRecovered,
 			dataBatcher: new (await import("../data-batcher")).DataBatcher((data) => {
@@ -359,7 +377,7 @@ export class TerminalManager extends EventEmitter {
 		// 2. Store session BEFORE async history init (so data handler can find it)
 		this.sessions.set(paneId, session);
 
-		// 3. Init history writer
+		// 3. Init history writer - use effectiveScrollback to preserve disk backup
 		const historyWriter = new HistoryWriter(
 			workspaceId,
 			paneId,
@@ -367,14 +385,14 @@ export class TerminalManager extends EventEmitter {
 			cols,
 			rows,
 		);
-		await historyWriter.init(opts.scrollback || undefined);
+		await historyWriter.init(effectiveScrollback || undefined);
 		session.historyWriter = historyWriter;
 
 		// 4. NOW wire data handler (will flush any buffered data)
 		lifecycle.setDataHandler((data) => this.handleLifecycleData(paneId, data));
 
-		if (opts.wasRecovered && opts.scrollback) {
-			portManager.scanOutput(opts.scrollback, paneId, workspaceId);
+		if (opts.wasRecovered && effectiveScrollback) {
+			portManager.scanOutput(effectiveScrollback, paneId, workspaceId);
 		}
 
 		if (!opts.wasRecovered && initialCommands && initialCommands.length > 0) {
@@ -390,7 +408,7 @@ export class TerminalManager extends EventEmitter {
 
 		return {
 			isNew: true,
-			scrollback: opts.scrollback,
+			scrollback: effectiveScrollback,
 			wasRecovered: opts.wasRecovered,
 		};
 	}

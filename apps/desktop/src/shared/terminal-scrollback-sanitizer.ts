@@ -44,15 +44,30 @@ const PATTERNS: readonly RegExp[] = [
 	MOUSE_SGR_PAYLOAD_RUN,
 ];
 
+// Fast check for digit followed by response terminator (c, M)
+const PAYLOAD_TERMINATOR_CHECK = /\d[cM]/;
+
 export function sanitizeTerminalScrollback(data: string): string {
 	if (!data) return data;
 
-	// Fast path: if there are no escape markers, no caret-escaped ESC, and no payload-ish
-	// delimiters, there's nothing to do.
-	if (!data.includes(ESC) && !data.includes("^[") && !data.includes(";")) {
-		return data;
+	const hasEsc = data.includes(ESC);
+	const hasCaret = data.includes("^[");
+
+	// Fast path: no escape sequences at all
+	if (!hasEsc && !hasCaret) {
+		// Only potential issue is payload leakage (digit followed by 'c' or 'M')
+		// DA payload: ...0;276;0c   Mouse payload: ...32;10;20M
+		if (!PAYLOAD_TERMINATOR_CHECK.test(data)) {
+			return data;
+		}
+		// Only run payload cleanup patterns
+		let sanitized = data;
+		sanitized = sanitized.replace(MOUSE_SGR_PAYLOAD_RUN, "");
+		sanitized = sanitized.replace(DA_PAYLOAD, "$1");
+		return sanitized;
 	}
 
+	// Full sanitization path for data with escape sequences
 	let sanitized = data;
 	for (const pattern of PATTERNS) {
 		sanitized = sanitized.replace(pattern, "");

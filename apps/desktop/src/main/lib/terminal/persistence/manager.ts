@@ -31,7 +31,8 @@ class ProcessPersistence {
 		if (this.initialized) return;
 		this.initialized = true;
 
-		if (!process.env.SUPERSET_TERMINAL_PERSISTENCE) {
+		// Strict check: only enable when explicitly set to "1"
+		if (process.env.SUPERSET_TERMINAL_PERSISTENCE !== "1") {
 			return;
 		}
 
