@@ -121,7 +121,7 @@
     },
     "apps/desktop": {
       "name": "@superset/desktop",
-      "version": "0.0.36",
+      "version": "0.0.38",
       "dependencies": {
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/sortable": "^10.0.0",
@@ -157,6 +157,7 @@
         "@xterm/addon-web-links": "^0.11.0",
         "@xterm/addon-webgl": "^0.18.0",
         "@xterm/xterm": "^5.5.0",
+        "@zenyr/bun-pty": "^0.4.4",
         "better-sqlite3": "12.5.0",
         "bindings": "^1.5.0",
         "clsx": "^2.1.1",
@@ -182,7 +183,6 @@
         "monaco-editor": "^0.55.1",
         "nanoid": "^5.1.6",
         "node-addon-api": "^7.1.0",
-        "node-pty": "1.1.0-beta30",
         "os-locale": "^6.0.2",
         "posthog-js": "1.310.1",
         "posthog-node": "^5.18.0",
@@ -1640,6 +1640,18 @@
 
     "@xyflow/system": ["@xyflow/system@0.0.74", "", { "dependencies": { "@types/d3-drag": "^3.0.7", "@types/d3-interpolate": "^3.0.4", "@types/d3-selection": "^3.0.10", "@types/d3-transition": "^3.0.8", "@types/d3-zoom": "^3.0.8", "d3-drag": "^3.0.0", "d3-interpolate": "^3.0.1", "d3-selection": "^3.0.0", "d3-zoom": "^3.0.0" } }, "sha512-7v7B/PkiVrkdZzSbL+inGAo6tkR/WQHHG0/jhSvLQToCsfa8YubOGmBYd1s08tpKpihdHDZFwzQZeR69QSBb4Q=="],
 
+    "@zenyr/bun-pty": ["@zenyr/bun-pty@0.4.4", "", { "optionalDependencies": { "@zenyr/bun-pty-darwin-arm64": "0.4.4", "@zenyr/bun-pty-darwin-x64": "0.4.4", "@zenyr/bun-pty-linux-arm64": "0.4.4", "@zenyr/bun-pty-linux-x64": "0.4.4", "@zenyr/bun-pty-win32-x64": "0.4.4" } }, "sha512-XtuHDNH5+7ggg9I44heYdnn2kW96+b9uxaC2q6hSyzrhQHSGq+82M07u8H3SokMCb/4Si1Rld5taKNQ3xM+Kxw=="],
+
+    "@zenyr/bun-pty-darwin-arm64": ["@zenyr/bun-pty-darwin-arm64@0.4.4", "", { "os": "darwin", "cpu": "arm64" }, "sha512-+tIBa2trf681O0ttftbarFEZuXOKOLrmplD6/AYKc87TCrp7JQrLVu0Slly+4Ci8tWYiE3MGTJGBhmPSTjLKIQ=="],
+
+    "@zenyr/bun-pty-darwin-x64": ["@zenyr/bun-pty-darwin-x64@0.4.4", "", { "os": "darwin", "cpu": "x64" }, "sha512-tbssenRokNls193hCSywpDwH0IpYfx8FkiDtm6u7i2sphNw6ktGftzQHH/021pWjZNVdYA75YhlfZrIGdhjHow=="],
+
+    "@zenyr/bun-pty-linux-arm64": ["@zenyr/bun-pty-linux-arm64@0.4.4", "", { "os": "linux", "cpu": "arm64" }, "sha512-kXTeEWZrjRn2jGGnxTrYnZSJ6ZRKTiR7otK7SlmVP+pa1OtZs5J77VG93/wWq2gpTAL7Bs4vNMjEj5A6UaJG7A=="],
+
+    "@zenyr/bun-pty-linux-x64": ["@zenyr/bun-pty-linux-x64@0.4.4", "", { "os": "linux", "cpu": "x64" }, "sha512-Vlxkvlfcg8BWDvChvJbN4N3lG7z08f+24d2jvcfx/guRz5w1qjvHfMGWvGj2DtbzIBDjXO0CaKKzdN/T2ZxSqA=="],
+
+    "@zenyr/bun-pty-win32-x64": ["@zenyr/bun-pty-win32-x64@0.4.4", "", { "os": "win32", "cpu": "x64" }, "sha512-esZqEjPHPWRfAd/IZNaC4mptJ2HFdPXJQPUZVIdrwxEumL7NRoQZXVrlO7MRSO2Jrjqgna4IuQIvOKvCwJNMrg=="],
+
     "abbrev": ["abbrev@1.1.1", "", {}, "sha512-nne9/IiQ/hzIhY6pdDnbBtz7DjPTKrY00P/zvPSm5pOFkl6xuGrGnXn/VtTNNfNtAfZ9/1RtehkszU9qcTii0Q=="],
 
     "accepts": ["accepts@2.0.0", "", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng=="],
@@ -2831,8 +2843,6 @@
     "node-api-version": ["node-api-version@0.2.1", "", { "dependencies": { "semver": "^7.3.5" } }, "sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q=="],
 
     "node-fetch": ["node-fetch@2.7.0", "", { "dependencies": { "whatwg-url": "^5.0.0" }, "peerDependencies": { "encoding": "^0.1.0" }, "optionalPeers": ["encoding"] }, "sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A=="],
-
-    "node-pty": ["node-pty@1.1.0-beta30", "", { "dependencies": { "node-addon-api": "^7.1.0" } }, "sha512-cmNYVWfbf961aOqnxIFXssvw6Fp6/78BQBNlwYRWUHBenJjUhCJ1wMZpJy+SegoLC07P9D6HTtq39Kd89rpv/w=="],
 
     "node-releases": ["node-releases@2.0.27", "", {}, "sha512-nmh3lCkYZ3grZvqcCH+fjmQ7X+H0OeZgP40OierEaAptX4XofMh5kwNbWh7lBduUzCcV/8kZ+NDLCwm2iorIlA=="],
 
