@@ -10,7 +10,7 @@ import { useTabsStore } from "renderer/stores/tabs/store";
 import { useTerminalCallbacksStore } from "renderer/stores/tabs/terminal-callbacks";
 import { useTerminalTheme } from "renderer/stores/theme";
 import { HOTKEYS } from "shared/hotkeys";
-import { parseCwd } from "shared/parse-cwd";
+import { parseCwd } from "./parseCwd";
 import { sanitizeForTitle } from "./commandBuffer";
 import {
 	createTerminalInstance,

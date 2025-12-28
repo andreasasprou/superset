@@ -85,6 +85,9 @@
 .tufte-markdown p {
 	margin-top: 0;
 	margin-bottom: 1.4rem;
+	text-align: justify;                                                                                                                                              
+	-webkit-hyphens: auto;                                                                                                                                            
+	hyphens: auto; 
 }
 
 .tufte-markdown blockquote {
