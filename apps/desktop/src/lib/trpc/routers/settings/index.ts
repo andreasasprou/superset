@@ -158,5 +158,26 @@ export const createSettingsRouter = () => {
 
 				return { success: true };
 			}),
+
+		getConfirmOnQuit: publicProcedure.query(() => {
+			const row = getSettings();
+			// Default to true (confirm on quit enabled by default)
+			return row.confirmOnQuit ?? true;
+		}),
+
+		setConfirmOnQuit: publicProcedure
+			.input(z.object({ enabled: z.boolean() }))
+			.mutation(({ input }) => {
+				localDb
+					.insert(settings)
+					.values({ id: 1, confirmOnQuit: input.enabled })
+					.onConflictDoUpdate({
+						target: settings.id,
+						set: { confirmOnQuit: input.enabled },
+					})
+					.run();
+
+				return { success: true };
+			}),
 	});
 };

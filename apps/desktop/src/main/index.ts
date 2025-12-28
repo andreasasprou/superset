@@ -3,7 +3,8 @@ import { initSentry } from "./lib/sentry";
 initSentry();
 
 import path from "node:path";
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
+import { settings } from "@superset/local-db";
 import { makeAppSetup } from "lib/electron-app/factories/app/setup";
 import { PROTOCOL_SCHEME } from "shared/constants";
 import { setupAgentHooks } from "./lib/agent-setup";
@@ -91,10 +92,76 @@ app.on("open-url", async (event, url) => {
 	await processDeepLink(url);
 });
 
-// Track when app is quitting to suppress expected termination errors
+type QuitState = "idle" | "confirming" | "confirmed" | "cleaning" | "ready-to-quit";
+let quitState: QuitState = "idle";
 let isQuitting = false;
-app.on("before-quit", () => {
+
+/**
+ * Check if the user has enabled the confirm-on-quit setting
+ */
+function getConfirmOnQuitSetting(): boolean {
+	try {
+		const row = localDb.select().from(settings).get();
+		// Default to true if not set
+		return row?.confirmOnQuit ?? true;
+	} catch {
+		// If we can't read the setting, default to showing the dialog
+		return true;
+	}
+}
+
+app.on("before-quit", async (event) => {
 	isQuitting = true;
+
+	if (quitState === "ready-to-quit") return;
+	if (quitState === "cleaning" || quitState === "confirming") {
+		event.preventDefault();
+		return;
+	}
+
+	// Check if we need to show confirmation
+	if (quitState === "idle") {
+		const shouldConfirm = getConfirmOnQuitSetting();
+
+		if (shouldConfirm) {
+			event.preventDefault();
+			quitState = "confirming";
+
+			const { response } = await dialog.showMessageBox({
+				type: "question",
+				buttons: ["Quit", "Cancel"],
+				defaultId: 0,
+				cancelId: 1,
+				title: "Quit Superset",
+				message: "Are you sure you want to quit?",
+			});
+
+			if (response === 1) {
+				// User cancelled
+				quitState = "idle";
+				isQuitting = false;
+				return;
+			}
+
+			// User confirmed, proceed with quit
+			quitState = "confirmed";
+			app.quit();
+			return;
+		}
+
+		// No confirmation needed
+		quitState = "confirmed";
+	}
+
+	event.preventDefault();
+	quitState = "cleaning";
+
+	try {
+		await Promise.all([terminalManager.cleanup(), posthog?.shutdown()]);
+	} finally {
+		quitState = "ready-to-quit";
+		app.quit();
+	}
 });
 
 process.on("uncaughtException", (error) => {
@@ -144,10 +211,5 @@ if (!gotTheLock) {
 		if (coldStartUrl) {
 			await processDeepLink(coldStartUrl);
 		}
-
-		// Clean up all terminals and analytics when app is quitting
-		app.on("before-quit", async () => {
-			await Promise.all([terminalManager.cleanup(), posthog?.shutdown()]);
-		});
 	})();
 }
