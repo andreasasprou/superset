@@ -10,6 +10,8 @@ import { useTabsStore } from "renderer/stores/tabs/store";
 import { useTerminalCallbacksStore } from "renderer/stores/tabs/terminal-callbacks";
 import { useTerminalTheme } from "renderer/stores/theme";
 import { HOTKEYS } from "shared/hotkeys";
+import { parseCwd } from "shared/parse-cwd";
+import { sanitizeTerminalScrollback } from "shared/terminal-scrollback-sanitizer";
 import { sanitizeForTitle } from "./commandBuffer";
 import {
 	createTerminalInstance,
@@ -20,7 +22,6 @@ import {
 	setupPasteHandler,
 	setupResizeHandlers,
 } from "./helpers";
-import { parseCwd } from "shared/parse-cwd";
 import { TerminalSearch } from "./TerminalSearch";
 import type { TerminalProps, TerminalStreamEvent } from "./types";
 import { shellEscapePaths } from "./utils";
@@ -142,7 +143,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		}
 
 		if (event.type === "data") {
-			xtermRef.current.write(event.data);
+			xtermRef.current.write(sanitizeTerminalScrollback(event.data));
 			updateCwdFromData(event.data);
 		} else if (event.type === "exit") {
 			isExitedRef.current = true;
@@ -226,7 +227,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			);
 			for (const event of events) {
 				if (event.type === "data") {
-					xterm.write(event.data);
+					xterm.write(sanitizeTerminalScrollback(event.data));
 					updateCwdRef.current(event.data);
 				} else {
 					isExitedRef.current = true;
@@ -242,7 +243,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			isNew: boolean;
 			scrollback: string;
 		}) => {
-			xterm.write(result.scrollback);
+			xterm.write(sanitizeTerminalScrollback(result.scrollback));
 			updateCwdRef.current(result.scrollback);
 		};
 

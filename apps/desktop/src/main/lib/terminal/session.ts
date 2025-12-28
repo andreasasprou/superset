@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import * as pty from "node-pty";
 import { parseCwd } from "shared/parse-cwd";
+import { sanitizeTerminalScrollback } from "shared/terminal-scrollback-sanitizer";
 import { getShellArgs } from "../agent-setup";
 import { DataBatcher } from "../data-batcher";
 import {
@@ -26,7 +27,7 @@ export async function recoverScrollback(
 
 	if (existingScrollback) {
 		return {
-			scrollback: existingScrollback,
+			scrollback: sanitizeTerminalScrollback(existingScrollback),
 			wasRecovered: true,
 			savedCwd: metadata?.cwd,
 		};
@@ -36,10 +37,11 @@ export async function recoverScrollback(
 
 	if (history.scrollback) {
 		const MAX_SCROLLBACK_CHARS = 500_000;
-		const scrollback =
+		const scrollback = sanitizeTerminalScrollback(
 			history.scrollback.length > MAX_SCROLLBACK_CHARS
 				? history.scrollback.slice(-MAX_SCROLLBACK_CHARS)
-				: history.scrollback;
+				: history.scrollback,
+		);
 		return {
 			scrollback,
 			wasRecovered: true,
@@ -187,8 +189,10 @@ export function processTerminalChunk(
 		dataToStore = extractContentAfterClear(data);
 	}
 
-	session.scrollback += dataToStore;
-	session.historyWriter?.write(dataToStore);
+	const sanitizedDataToStore = sanitizeTerminalScrollback(dataToStore);
+
+	session.scrollback += sanitizedDataToStore;
+	session.historyWriter?.write(sanitizedDataToStore);
 
 	const newOsc7Buffer = (osc7Buffer + data).slice(-OSC7_BUFFER_SIZE);
 	const newCwd = parseCwd(newOsc7Buffer);
@@ -197,7 +201,11 @@ export function processTerminalChunk(
 		session.historyWriter?.updateCwd(newCwd);
 	}
 
-	portManager.scanOutput(dataToStore, session.paneId, session.workspaceId);
+	portManager.scanOutput(
+		sanitizedDataToStore,
+		session.paneId,
+		session.workspaceId,
+	);
 	session.dataBatcher.write(data);
 
 	return { newOsc7Buffer };

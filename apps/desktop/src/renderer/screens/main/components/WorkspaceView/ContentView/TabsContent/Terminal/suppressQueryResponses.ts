@@ -34,6 +34,15 @@ export function suppressQueryResponses(terminal: Terminal): () => void {
 		}),
 	);
 
+	// CSI < ... (M|m) - SGR mouse tracking reports
+	// These are terminal-to-host input reports that can leak into PTY output and should never display.
+	disposables.push(
+		parser.registerCsiHandler({ prefix: "<", final: "M" }, () => true),
+	);
+	disposables.push(
+		parser.registerCsiHandler({ prefix: "<", final: "m" }, () => true),
+	);
+
 	// OSC 10-19 - Color query responses
 	// OSC 10: foreground color (ESC]10;rgb:ffff/ffff/ffff BEL)
 	// OSC 11: background color
