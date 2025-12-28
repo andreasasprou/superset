@@ -23,6 +23,7 @@ interface WorkspaceGroupProps {
 	workspaceWidth: number;
 	hoveredWorkspaceId: string | null;
 	onWorkspaceHover: (id: string | null) => void;
+	allWorkspaces: Array<{ id: string }>;
 }
 
 export function WorkspaceGroup({
@@ -35,6 +36,7 @@ export function WorkspaceGroup({
 	workspaceWidth,
 	hoveredWorkspaceId: _hoveredWorkspaceId,
 	onWorkspaceHover,
+	allWorkspaces,
 }: WorkspaceGroupProps) {
 	const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -83,6 +85,8 @@ export function WorkspaceGroup({
 								width={workspaceWidth}
 								onMouseEnter={() => onWorkspaceHover(workspace.id)}
 								onMouseLeave={() => onWorkspaceHover(null)}
+								allWorkspaces={allWorkspaces}
+								activeWorkspaceId={activeWorkspaceId}
 							/>
 						</motion.div>
 					))}

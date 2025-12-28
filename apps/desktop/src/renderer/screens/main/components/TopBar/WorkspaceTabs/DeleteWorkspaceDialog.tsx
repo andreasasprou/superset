@@ -9,10 +9,12 @@ import {
 import { Button } from "@superset/ui/button";
 import { toast } from "@superset/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
+import { useState } from "react";
 import { trpc } from "renderer/lib/trpc";
 import {
 	useCloseWorkspace,
 	useDeleteWorkspace,
+	useSetActiveWorkspace,
 } from "renderer/react-query/workspaces";
 
 interface DeleteWorkspaceDialogProps {
@@ -21,7 +23,15 @@ interface DeleteWorkspaceDialogProps {
 	workspaceType?: "worktree" | "branch";
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
+	allWorkspaces: Array<{ id: string }>;
+	activeWorkspaceId: string | null;
 }
+
+// Yield to ensure UI has repainted before deletion starts
+const yieldToPaint = () =>
+	new Promise<void>((resolve) => {
+		requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+	});
 
 export function DeleteWorkspaceDialog({
 	workspaceId,
@@ -29,10 +39,74 @@ export function DeleteWorkspaceDialog({
 	workspaceType = "worktree",
 	open,
 	onOpenChange,
+	allWorkspaces,
+	activeWorkspaceId,
 }: DeleteWorkspaceDialogProps) {
 	const isBranch = workspaceType === "branch";
 	const deleteWorkspace = useDeleteWorkspace();
 	const closeWorkspace = useCloseWorkspace();
+	const setActiveWorkspace = useSetActiveWorkspace();
+	const utils = trpc.useUtils();
+
+	const [isDeleting, setIsDeleting] = useState(false);
+	const [isClosing, setIsClosing] = useState(false);
+
+	const isActiveWorkspace = activeWorkspaceId === workspaceId;
+	const isLastWorkspace = allWorkspaces.length === 1;
+
+	// Find the next workspace to navigate to when deleting the active one
+	const getNextWorkspaceId = (): string | null => {
+		if (!isActiveWorkspace) return null;
+		if (isLastWorkspace) return null;
+
+		const currentIndex = allWorkspaces.findIndex((w) => w.id === workspaceId);
+
+		// Handle edge case: workspace not found in list
+		if (currentIndex === -1) {
+			const firstOther = allWorkspaces.find((w) => w.id !== workspaceId);
+			return firstOther?.id ?? null;
+		}
+
+		// Prefer next workspace, fall back to previous
+		const nextIndex =
+			currentIndex < allWorkspaces.length - 1
+				? currentIndex + 1
+				: currentIndex - 1;
+		return allWorkspaces[nextIndex]?.id ?? null;
+	};
+
+	// Navigate away from the workspace before deletion to avoid showing terminal teardown
+	const navigateAwayBeforeTeardown = async (): Promise<{
+		didOptimisticClear: boolean;
+		previousActive: ReturnType<typeof utils.workspaces.getActive.getData>;
+	}> => {
+		// Re-check active workspace from cache (avoid stale dialog snapshot)
+		const currentActiveId = utils.workspaces.getActive.getData()?.id;
+		const isCurrentlyActive = currentActiveId === workspaceId;
+
+		if (!isCurrentlyActive) {
+			return { didOptimisticClear: false, previousActive: undefined };
+		}
+
+		const nextWorkspaceId = getNextWorkspaceId();
+
+		if (nextWorkspaceId) {
+			try {
+				await setActiveWorkspace.mutateAsync({ id: nextWorkspaceId });
+				return { didOptimisticClear: false, previousActive: undefined };
+			} catch {
+				// Navigation failed - fall back to optimistic clear
+				const previousActive = utils.workspaces.getActive.getData();
+				utils.workspaces.getActive.setData(undefined, null);
+				return { didOptimisticClear: true, previousActive };
+			}
+		} else {
+			// Last workspace: optimistically clear active to show StartView immediately
+			const previousActive = utils.workspaces.getActive.getData();
+			utils.workspaces.getActive.setData(undefined, null);
+			return { didOptimisticClear: true, previousActive };
+		}
+	};
 
 	const { data: gitStatusData, isLoading: isLoadingGitStatus } =
 		trpc.workspaces.canDelete.useQuery(
@@ -61,44 +135,74 @@ export function DeleteWorkspaceDialog({
 		: terminalCountData;
 	const isLoading = isLoadingGitStatus;
 
-	const handleClose = () => {
+	const handleClose = async () => {
+		setIsClosing(true);
 		onOpenChange(false);
 
-		toast.promise(closeWorkspace.mutateAsync({ id: workspaceId }), {
-			loading: "Closing...",
-			success: (result) => {
-				if (result.terminalWarning) {
-					setTimeout(() => {
-						toast.warning("Terminal warning", {
-							description: result.terminalWarning,
-						});
-					}, 100);
-				}
-				return "Workspace closed";
-			},
-			error: (error) =>
-				error instanceof Error ? error.message : "Failed to close",
-		});
+		const { didOptimisticClear, previousActive } =
+			await navigateAwayBeforeTeardown();
+		await yieldToPaint();
+
+		try {
+			const result = await closeWorkspace.mutateAsync({ id: workspaceId });
+
+			await Promise.all([
+				utils.workspaces.getAllGrouped.invalidate(),
+				utils.workspaces.getActive.invalidate(),
+			]);
+
+			if (result.terminalWarning) {
+				toast.warning("Terminal warning", {
+					description: result.terminalWarning,
+				});
+			} else {
+				toast.success("Workspace closed");
+			}
+		} catch (error) {
+			if (didOptimisticClear && previousActive !== undefined) {
+				utils.workspaces.getActive.setData(undefined, previousActive);
+			}
+			toast.error(
+				error instanceof Error ? error.message : "Failed to close workspace",
+			);
+		} finally {
+			setIsClosing(false);
+		}
 	};
 
-	const handleDelete = () => {
+	const handleDelete = async () => {
+		setIsDeleting(true);
 		onOpenChange(false);
 
-		toast.promise(deleteWorkspace.mutateAsync({ id: workspaceId }), {
-			loading: "Deleting...",
-			success: (result) => {
-				if (result.terminalWarning) {
-					setTimeout(() => {
-						toast.warning("Terminal warning", {
-							description: result.terminalWarning,
-						});
-					}, 100);
-				}
-				return "Workspace deleted";
-			},
-			error: (error) =>
-				error instanceof Error ? error.message : "Failed to delete",
-		});
+		const { didOptimisticClear, previousActive } =
+			await navigateAwayBeforeTeardown();
+		await yieldToPaint();
+
+		try {
+			const result = await deleteWorkspace.mutateAsync({ id: workspaceId });
+
+			await Promise.all([
+				utils.workspaces.getAllGrouped.invalidate(),
+				utils.workspaces.getActive.invalidate(),
+			]);
+
+			if (result.terminalWarning) {
+				toast.warning("Terminal warning", {
+					description: result.terminalWarning,
+				});
+			} else {
+				toast.success("Workspace deleted");
+			}
+		} catch (error) {
+			if (didOptimisticClear && previousActive !== undefined) {
+				utils.workspaces.getActive.setData(undefined, previousActive);
+			}
+			toast.error(
+				error instanceof Error ? error.message : "Failed to delete workspace",
+			);
+		} finally {
+			setIsDeleting(false);
+		}
 	};
 
 	const canDelete = canDeleteData?.canDelete ?? true;
@@ -132,6 +236,7 @@ export function DeleteWorkspaceDialog({
 							size="sm"
 							className="h-7 px-3 text-xs"
 							onClick={() => onOpenChange(false)}
+							disabled={isClosing}
 						>
 							Cancel
 						</Button>
@@ -140,8 +245,9 @@ export function DeleteWorkspaceDialog({
 							size="sm"
 							className="h-7 px-3 text-xs"
 							onClick={handleClose}
+							disabled={isClosing}
 						>
-							Close
+							{isClosing ? "Closing..." : "Close"}
 						</Button>
 					</AlertDialogFooter>
 				</AlertDialogContent>
@@ -190,6 +296,7 @@ export function DeleteWorkspaceDialog({
 						size="sm"
 						className="h-7 px-3 text-xs"
 						onClick={() => onOpenChange(false)}
+						disabled={isClosing || isDeleting}
 					>
 						Cancel
 					</Button>
@@ -200,9 +307,9 @@ export function DeleteWorkspaceDialog({
 								size="sm"
 								className="h-7 px-3 text-xs"
 								onClick={handleClose}
-								disabled={isLoading}
+								disabled={isLoading || isClosing || isDeleting}
 							>
-								Close
+								{isClosing ? "Closing..." : "Close"}
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="top" className="text-xs max-w-[200px]">
@@ -216,9 +323,9 @@ export function DeleteWorkspaceDialog({
 								size="sm"
 								className="h-7 px-3 text-xs"
 								onClick={handleDelete}
-								disabled={!canDelete || isLoading}
+								disabled={!canDelete || isLoading || isClosing || isDeleting}
 							>
-								Delete
+								{isDeleting ? "Deleting..." : "Delete"}
 							</Button>
 						</TooltipTrigger>
 						<TooltipContent side="top" className="text-xs max-w-[200px]">

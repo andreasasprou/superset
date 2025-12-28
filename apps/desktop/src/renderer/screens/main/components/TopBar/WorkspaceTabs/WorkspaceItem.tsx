@@ -34,6 +34,8 @@ interface WorkspaceItemProps {
 	width: number;
 	onMouseEnter?: () => void;
 	onMouseLeave?: () => void;
+	allWorkspaces: Array<{ id: string }>;
+	activeWorkspaceId: string | null;
 }
 
 export function WorkspaceItem({
@@ -48,6 +50,8 @@ export function WorkspaceItem({
 	width,
 	onMouseEnter,
 	onMouseLeave,
+	allWorkspaces,
+	activeWorkspaceId,
 }: WorkspaceItemProps) {
 	const isBranchWorkspace = workspaceType === "branch";
 	const setActive = useSetActiveWorkspace();
@@ -325,6 +329,8 @@ export function WorkspaceItem({
 				workspaceType={workspaceType}
 				open={showDeleteDialog}
 				onOpenChange={setShowDeleteDialog}
+				allWorkspaces={allWorkspaces}
+				activeWorkspaceId={activeWorkspaceId}
 			/>
 		</>
 	);

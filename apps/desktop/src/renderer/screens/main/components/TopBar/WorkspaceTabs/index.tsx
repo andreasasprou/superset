@@ -182,6 +182,7 @@ export function WorkspacesTabs() {
 								workspaceWidth={workspaceWidth}
 								hoveredWorkspaceId={hoveredWorkspaceId}
 								onWorkspaceHover={setHoveredWorkspaceId}
+								allWorkspaces={allWorkspaces}
 							/>
 							{groupIndex < groups.length - 1 && (
 								<div className="flex items-center h-full py-2">
