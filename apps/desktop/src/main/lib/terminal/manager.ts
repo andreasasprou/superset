@@ -12,6 +12,7 @@ import { getSessionName, processPersistence } from "./persistence/manager";
 import type { SessionLifecycle } from "./persistence/session-lifecycle";
 import type { PersistenceErrorCode, SessionState } from "./persistence/types";
 import { portManager } from "./port-manager";
+import { sanitizeTerminalScrollback } from "shared/terminal-scrollback-sanitizer";
 import {
 	closeSessionHistory,
 	closeSessionHistoryForDetach,
@@ -182,9 +183,11 @@ export class TerminalManager extends EventEmitter {
 					setTimeout(() => reject(new Error("timeout")), 2000),
 				),
 			]);
-			return scrollback.length > MAX_SCROLLBACK_CHARS
-				? scrollback.slice(-MAX_SCROLLBACK_CHARS)
-				: scrollback;
+			const bounded =
+				scrollback.length > MAX_SCROLLBACK_CHARS
+					? scrollback.slice(-MAX_SCROLLBACK_CHARS)
+					: scrollback;
+			return sanitizeTerminalScrollback(bounded);
 		} catch {
 			return "";
 		}
@@ -278,7 +281,12 @@ export class TerminalManager extends EventEmitter {
 
 		if (state === "closed" && session) {
 			session.isAlive = false;
-			void this.cleanupSession(paneId, session, 0); // Fire-and-forget
+			void this.cleanupSession(paneId, session, 0).catch((err) =>
+				console.error(
+					`[TerminalManager] cleanupSession failed for ${paneId}:`,
+					err,
+				),
+			);
 			this.emit(`exit:${paneId}`, 0, undefined);
 		}
 	}
@@ -639,17 +647,21 @@ export class TerminalManager extends EventEmitter {
 			return;
 		}
 
-		if (session.isPersistentBackend) {
-			if (signal === "SIGINT") {
-				// C-c is the only signal that maps cleanly to tmux
+		// SIGINT = interrupt current command (Ctrl+C semantics)
+		// Other signals = terminate the session
+		if (signal === "SIGINT") {
+			if (session.isPersistentBackend) {
 				const lifecycle = this.lifecycles.get(paneId);
 				lifecycle?.write("\x03");
 			} else {
-				// SIGTERM/SIGKILL → kill the session entirely
-				void this.kill({ paneId });
+				// Write Ctrl+C to interrupt foreground process (not pty.kill which signals shell)
+				session.pty.write("\x03");
 			}
 		} else {
-			session.pty.kill(signal);
+			// SIGTERM/SIGKILL → kill the session entirely
+			void this.kill({ paneId }).catch((err) =>
+				console.error(`[TerminalManager] kill failed for ${paneId}:`, err),
+			);
 		}
 		session.lastActive = Date.now();
 	}
@@ -685,7 +697,7 @@ export class TerminalManager extends EventEmitter {
 
 			// Manual cleanup + emit (single authoritative path)
 			session.isAlive = false;
-			await this.cleanupSession(paneId, session);
+			await this.cleanupSession(paneId, session, 0);
 			this.emit(`exit:${paneId}`, 0, undefined);
 		} else {
 			// Non-persistent: close lifecycle, kill PTY, let setupExitHandler handle cleanup
@@ -802,7 +814,7 @@ export class TerminalManager extends EventEmitter {
 		for (const [paneId, session] of persistentSessions) {
 			try {
 				session.isAlive = false;
-				await this.cleanupSession(paneId, session);
+				await this.cleanupSession(paneId, session, 0);
 				this.emit(`exit:${paneId}`, 0, undefined);
 				killed++;
 			} catch {
