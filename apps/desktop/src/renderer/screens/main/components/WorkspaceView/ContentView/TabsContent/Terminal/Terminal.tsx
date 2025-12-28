@@ -10,7 +10,6 @@ import { useTabsStore } from "renderer/stores/tabs/store";
 import { useTerminalCallbacksStore } from "renderer/stores/tabs/terminal-callbacks";
 import { useTerminalTheme } from "renderer/stores/theme";
 import { HOTKEYS } from "shared/hotkeys";
-import { parseCwd } from "./parseCwd";
 import { sanitizeForTitle } from "./commandBuffer";
 import {
 	createTerminalInstance,
@@ -21,6 +20,7 @@ import {
 	setupPasteHandler,
 	setupResizeHandlers,
 } from "./helpers";
+import { parseCwd } from "./parseCwd";
 import { TerminalSearch } from "./TerminalSearch";
 import type { TerminalProps, TerminalStreamEvent } from "./types";
 import { shellEscapePaths } from "./utils";
