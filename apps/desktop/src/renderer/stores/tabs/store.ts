@@ -4,9 +4,10 @@ import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import { trpcTabsStorage } from "../../lib/trpc-storage";
 import { movePaneToNewTab, movePaneToTab } from "./actions/move-pane";
-import type { TabsState, TabsStore } from "./types";
+import type { AddFileViewerPaneOptions, TabsState, TabsStore } from "./types";
 import {
 	type CreatePaneOptions,
+	createFileViewerPane,
 	createPane,
 	createTabWithPane,
 	extractPaneIdsFromLayout,
@@ -334,6 +335,112 @@ export const useTabsStore = create<TabsStore>()(
 						focusedPaneIds: {
 							...state.focusedPaneIds,
 							[tabId]: newPane.id,
+						},
+					});
+
+					return newPane.id;
+				},
+
+				addFileViewerPane: (
+					workspaceId: string,
+					options: AddFileViewerPaneOptions,
+				) => {
+					const state = get();
+					const activeTabId = state.activeTabIds[workspaceId];
+					const activeTab = state.tabs.find((t) => t.id === activeTabId);
+
+					// If no active tab, create a new one (this shouldn't normally happen)
+					if (!activeTab) {
+						const { tabId, paneId } = get().addTab(workspaceId);
+						// Update the pane to be a file-viewer
+						const pane = state.panes[paneId];
+						if (pane) {
+							const fileViewerPane = createFileViewerPane(tabId, options);
+							set((s) => ({
+								panes: {
+									...s.panes,
+									[paneId]: {
+										...fileViewerPane,
+										id: paneId, // Keep the original ID
+									},
+								},
+							}));
+						}
+						return paneId;
+					}
+
+					// Look for an existing unlocked file-viewer pane in the active tab
+					const tabPaneIds = extractPaneIdsFromLayout(activeTab.layout);
+					const fileViewerPanes = tabPaneIds
+						.map((id) => state.panes[id])
+						.filter(
+							(p) =>
+								p?.type === "file-viewer" &&
+								p.fileViewer &&
+								!p.fileViewer.isLocked,
+						);
+
+					// If we found an unlocked file-viewer pane, reuse it
+					if (fileViewerPanes.length > 0) {
+						const paneToReuse = fileViewerPanes[0];
+						const fileName =
+							options.filePath.split("/").pop() || options.filePath;
+
+						// Determine default view mode
+						let viewMode: "raw" | "rendered" | "diff" = "raw";
+						if (options.diffCategory) {
+							viewMode = "diff";
+						} else if (
+							options.filePath.endsWith(".md") ||
+							options.filePath.endsWith(".markdown")
+						) {
+							viewMode = "rendered";
+						}
+
+						set({
+							panes: {
+								...state.panes,
+								[paneToReuse.id]: {
+									...paneToReuse,
+									name: fileName,
+									fileViewer: {
+										filePath: options.filePath,
+										viewMode,
+										isLocked: false,
+										diffLayout: "inline",
+										diffCategory: options.diffCategory,
+										commitHash: options.commitHash,
+										oldPath: options.oldPath,
+									},
+								},
+							},
+							focusedPaneIds: {
+								...state.focusedPaneIds,
+								[activeTab.id]: paneToReuse.id,
+							},
+						});
+
+						return paneToReuse.id;
+					}
+
+					// No reusable pane found, create a new one
+					const newPane = createFileViewerPane(activeTab.id, options);
+
+					const newLayout: MosaicNode<string> = {
+						direction: "row",
+						first: activeTab.layout,
+						second: newPane.id,
+						splitPercentage: 50,
+					};
+
+					set({
+						tabs: state.tabs.map((t) =>
+							t.id === activeTab.id ? { ...t, layout: newLayout } : t,
+						),
+						panes: { ...state.panes, [newPane.id]: newPane },
+						focusedPaneIds: {
+							...state.focusedPaneIds,
+							[activeTab.id]: newPane.id,
 						},
 					});
 
