@@ -352,20 +352,17 @@ export const useTabsStore = create<TabsStore>()(
 					// If no active tab, create a new one (this shouldn't normally happen)
 					if (!activeTab) {
 						const { tabId, paneId } = get().addTab(workspaceId);
-						// Update the pane to be a file-viewer
-						const pane = state.panes[paneId];
-						if (pane) {
-							const fileViewerPane = createFileViewerPane(tabId, options);
-							set((s) => ({
-								panes: {
-									...s.panes,
-									[paneId]: {
-										...fileViewerPane,
-										id: paneId, // Keep the original ID
-									},
+						// Update the pane to be a file-viewer (must use set() to get fresh state after addTab)
+						const fileViewerPane = createFileViewerPane(tabId, options);
+						set((s) => ({
+							panes: {
+								...s.panes,
+								[paneId]: {
+									...fileViewerPane,
+									id: paneId, // Keep the original ID
 								},
-							}));
-						}
+							},
+						}));
 						return paneId;
 					}
 
