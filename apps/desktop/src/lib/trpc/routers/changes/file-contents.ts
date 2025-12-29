@@ -1,10 +1,77 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
+import { isAbsolute, join, normalize, relative } from "node:path";
 import type { FileContents } from "shared/changes-types";
 import simpleGit from "simple-git";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
 import { detectLanguage } from "./utils/parse-status";
+
+/** Maximum file size for reading (2 MiB) */
+const MAX_FILE_SIZE = 2 * 1024 * 1024;
+
+/** Bytes to scan for binary detection */
+const BINARY_CHECK_SIZE = 8192;
+
+/**
+ * Result type for readWorkingFile procedure
+ */
+type ReadWorkingFileResult =
+	| { ok: true; content: string; truncated: boolean; byteLength: number }
+	| {
+			ok: false;
+			reason: "not-found" | "too-large" | "binary" | "outside-worktree";
+	  };
+
+/**
+ * Validates that a file path is within the worktree and doesn't escape via symlinks
+ */
+async function validatePathInWorktree(
+	worktreePath: string,
+	filePath: string,
+): Promise<{ valid: boolean; resolvedPath?: string; reason?: string }> {
+	// Reject absolute paths
+	if (isAbsolute(filePath)) {
+		return { valid: false, reason: "outside-worktree" };
+	}
+
+	// Normalize and check for traversal
+	const normalizedPath = normalize(filePath);
+	if (normalizedPath.startsWith("..") || normalizedPath.includes("/../")) {
+		return { valid: false, reason: "outside-worktree" };
+	}
+
+	const fullPath = join(worktreePath, normalizedPath);
+
+	// Resolve symlinks and verify the real path is still within worktree
+	try {
+		const realWorktreePath = await realpath(worktreePath);
+		const realFilePath = await realpath(fullPath);
+		const relativePath = relative(realWorktreePath, realFilePath);
+
+		// If relative path starts with "..", the file is outside worktree
+		if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
+			return { valid: false, reason: "outside-worktree" };
+		}
+
+		return { valid: true, resolvedPath: realFilePath };
+	} catch {
+		// File doesn't exist
+		return { valid: false, reason: "not-found" };
+	}
+}
+
+/**
+ * Detects if a buffer contains binary content by checking for NUL bytes
+ */
+function isBinaryContent(buffer: Buffer): boolean {
+	const checkLength = Math.min(buffer.length, BINARY_CHECK_SIZE);
+	for (let i = 0; i < checkLength; i++) {
+		if (buffer[i] === 0) {
+			return true;
+		}
+	}
+	return false;
+}
 
 export const createFileContentsRouter = () => {
 	return router({
@@ -53,6 +120,68 @@ export const createFileContentsRouter = () => {
 				const fullPath = join(input.worktreePath, input.filePath);
 				await writeFile(fullPath, input.content, "utf-8");
 				return { success: true };
+			}),
+
+		/**
+		 * Read a working tree file safely with size cap and binary detection.
+		 * Used for File Viewer raw/rendered modes.
+		 * Follows DL-005 (path validation) and DL-008 (size/binary policy).
+		 */
+		readWorkingFile: publicProcedure
+			.input(
+				z.object({
+					worktreePath: z.string(),
+					filePath: z.string(),
+				}),
+			)
+			.query(async ({ input }): Promise<ReadWorkingFileResult> => {
+				// Validate path is within worktree
+				const validation = await validatePathInWorktree(
+					input.worktreePath,
+					input.filePath,
+				);
+
+				if (!validation.valid || !validation.resolvedPath) {
+					return {
+						ok: false,
+						reason: (validation.reason ?? "not-found") as
+							| "not-found"
+							| "outside-worktree",
+					};
+				}
+
+				const resolvedPath = validation.resolvedPath;
+
+				// Check file size
+				try {
+					const stats = await lstat(resolvedPath);
+					if (stats.size > MAX_FILE_SIZE) {
+						return { ok: false, reason: "too-large" };
+					}
+				} catch {
+					return { ok: false, reason: "not-found" };
+				}
+
+				// Read file content
+				let buffer: Buffer;
+				try {
+					buffer = await readFile(resolvedPath);
+				} catch {
+					return { ok: false, reason: "not-found" };
+				}
+
+				// Check for binary content
+				if (isBinaryContent(buffer)) {
+					return { ok: false, reason: "binary" };
+				}
+
+				// Return content as string
+				return {
+					ok: true,
+					content: buffer.toString("utf-8"),
+					truncated: false,
+					byteLength: buffer.length,
+				};
 			}),
 	});
 };

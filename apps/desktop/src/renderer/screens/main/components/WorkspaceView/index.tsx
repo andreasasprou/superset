@@ -3,6 +3,7 @@ import { trpc } from "renderer/lib/trpc";
 import { useAppHotkey } from "renderer/stores/hotkeys";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import { getNextPaneId, getPreviousPaneId } from "renderer/stores/tabs/utils";
+import { useWorkspaceViewModeStore } from "renderer/stores/workspace-view-mode";
 import { ContentView } from "./ContentView";
 import { ResizableSidebar } from "./ResizableSidebar";
 import { WorkspaceActionBar } from "./WorkspaceActionBar";
@@ -39,16 +40,31 @@ export function WorkspaceView() {
 	// Get focused pane ID for the active tab
 	const focusedPaneId = activeTabId ? focusedPaneIds[activeTabId] : null;
 
+	// View mode for terminal creation - subscribe to actual data for reactivity
+	const viewModeByWorkspaceId = useWorkspaceViewModeStore(
+		(s) => s.viewModeByWorkspaceId,
+	);
+	const setWorkspaceViewMode = useWorkspaceViewModeStore(
+		(s) => s.setWorkspaceViewMode,
+	);
+	const viewMode = activeWorkspaceId
+		? (viewModeByWorkspaceId[activeWorkspaceId] ?? "workbench")
+		: "workbench";
+
 	// Tab management shortcuts
 	useAppHotkey(
 		"NEW_TERMINAL",
 		() => {
 			if (activeWorkspaceId) {
+				// If in Review mode, switch to Workbench first
+				if (viewMode === "review") {
+					setWorkspaceViewMode(activeWorkspaceId, "workbench");
+				}
 				addTab(activeWorkspaceId);
 			}
 		},
 		undefined,
-		[activeWorkspaceId, addTab],
+		[activeWorkspaceId, addTab, viewMode, setWorkspaceViewMode],
 	);
 
 	useAppHotkey(

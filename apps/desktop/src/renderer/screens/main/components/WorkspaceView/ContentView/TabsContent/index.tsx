@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { trpc } from "renderer/lib/trpc";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import { EmptyTabView } from "./EmptyTabView";
+import { GroupStrip } from "./GroupStrip";
 import { TabView } from "./TabView";
 
 export function TabsContent() {
@@ -23,5 +24,12 @@ export function TabsContent() {
 		return <EmptyTabView />;
 	}
 
-	return <TabView tab={tabToRender} panes={panes} />;
+	return (
+		<div className="h-full flex flex-col overflow-hidden">
+			<GroupStrip />
+			<div className="flex-1 min-h-0 overflow-hidden">
+				<TabView tab={tabToRender} panes={panes} />
+			</div>
+		</div>
+	);
 }
