@@ -152,7 +152,7 @@ export function FileViewerPane({
 
 	// Save handler for raw mode editor
 	const handleSaveRaw = useCallback(() => {
-		if (!editorRef.current || !filePath) return;
+		if (!editorRef.current || !filePath || !worktreePath) return;
 		saveFileMutation.mutate({
 			worktreePath,
 			filePath,
@@ -163,7 +163,7 @@ export function FileViewerPane({
 	// Save handler for diff mode
 	const handleSaveDiff = useCallback(
 		(content: string) => {
-			if (!filePath) return;
+			if (!filePath || !worktreePath) return;
 			saveFileMutation.mutate({
 				worktreePath,
 				filePath,
@@ -211,7 +211,10 @@ export function FileViewerPane({
 	const { data: rawFileData, isLoading: isLoadingRaw } =
 		trpc.changes.readWorkingFile.useQuery(
 			{ worktreePath, filePath },
-			{ enabled: !!fileViewer && viewMode !== "diff" && !!filePath },
+			{
+				enabled:
+					!!fileViewer && viewMode !== "diff" && !!filePath && !!worktreePath,
+			},
 		);
 
 	// Fetch diff content - always call hook, use enabled to control fetching
@@ -226,7 +229,11 @@ export function FileViewerPane({
 			},
 			{
 				enabled:
-					!!fileViewer && viewMode === "diff" && !!diffCategory && !!filePath,
+					!!fileViewer &&
+					viewMode === "diff" &&
+					!!diffCategory &&
+					!!filePath &&
+					!!worktreePath,
 			},
 		);
 
