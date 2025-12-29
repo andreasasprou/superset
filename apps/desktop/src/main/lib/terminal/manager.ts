@@ -772,6 +772,7 @@ export class TerminalManager extends EventEmitter {
 		// 3. Manual cleanup + emit for persistent sessions
 		for (const [paneId, session] of persistentSessions) {
 			try {
+				session.deleteHistoryOnExit = true;
 				session.isAlive = false;
 				await this.cleanupSession(paneId, session, 0);
 				this.emit(`exit:${paneId}`, 0, undefined);
@@ -904,16 +905,26 @@ export class TerminalManager extends EventEmitter {
 				lifecycle.detach();
 			}
 
-			if (session.isPersistentBackend && session.isAlive) {
+			if (session.isPersistentBackend) {
+				if (session.cleanupTimeout) {
+					clearTimeout(session.cleanupTimeout);
+					session.cleanupTimeout = undefined;
+				}
+
+				if (lifecycle) {
+					this.lifecycles.delete(paneId);
+				}
+
 				session.isExpectedDetach = true;
 				session.isAlive = false;
 				await closeSessionHistoryForDetach(session);
 				try {
 					session.pty.kill();
 				} catch {}
-			} else {
-				await this.kill({ paneId });
+				continue;
 			}
+
+			await this.kill({ paneId });
 		}
 		this.lifecycles.clear();
 		this.osc7Buffers.clear();
@@ -929,6 +940,11 @@ export class TerminalManager extends EventEmitter {
 		const exitPromises: Promise<void>[] = [];
 
 		for (const [paneId, session] of this.sessions.entries()) {
+			if (session.isPersistentBackend) {
+				const sessionName = getSessionName(session.workspaceId, paneId);
+				await processPersistence.killSession(sessionName).catch(() => {});
+			}
+
 			if (session.isAlive) {
 				const exitPromise = new Promise<void>((resolve) => {
 					let timeoutId: ReturnType<typeof setTimeout> | undefined;

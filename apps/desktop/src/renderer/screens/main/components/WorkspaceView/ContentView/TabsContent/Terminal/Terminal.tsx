@@ -22,6 +22,7 @@ import {
 	setupPasteHandler,
 	setupResizeHandlers,
 } from "./helpers";
+import { sanitizeRestoredScrollback } from "./sanitize-restored-scrollback";
 import { TerminalSearch } from "./TerminalSearch";
 import type { TerminalProps, TerminalStreamEvent } from "./types";
 import { shellEscapePaths } from "./utils";
@@ -245,22 +246,11 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			isNew: boolean;
 			scrollback: string;
 		}) => {
-			xterm.write(sanitizeTerminalScrollback(result.scrollback));
-			// Reset terminal modes that may have been enabled by restored scrollback
-			// This ensures the terminal starts in a clean, predictable state:
-			// - ?1049l: disable alternate screen buffer
-			// - ?1l: disable application cursor keys (DECCKM)
-			// - ?1000l/?1002l/?1003l/?1006l: disable mouse tracking modes
-			// - ?2004l: disable bracketed paste mode
-			// - ?1004l: disable focus reporting
-			// - ?7h: enable auto-wrap mode (DECAWM) - restore default
-			// - r: reset scroll region to full screen (DECSTBM)
-			// - (B: reset character set to ASCII (G0)
-			xterm.write(
-				"\x1b[?1049l\x1b[?1l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" +
-					"\x1b[?2004l\x1b[?1004l\x1b[?7h\x1b[r\x1b(B",
+			const restored = sanitizeRestoredScrollback(
+				sanitizeTerminalScrollback(result.scrollback),
 			);
-			updateCwdRef.current(result.scrollback);
+			xterm.write(restored);
+			updateCwdRef.current(restored);
 		};
 
 		const restartTerminal = () => {

@@ -16,6 +16,9 @@ mock.module("main/lib/analytics", () => ({
 
 // Import manager after mocks are set up
 const { TerminalManager } = await import("./manager");
+const { getSessionName, processPersistence } = await import(
+	"./persistence/manager"
+);
 
 // Use real history implementation - it will write to tmpdir thanks to NODE_ENV=test
 const testTmpDir = join(tmpdir(), "superset-test");
@@ -394,6 +397,42 @@ describe("TerminalManager", () => {
 		});
 	});
 
+	describe("detachAll", () => {
+		it("should not kill persistent backend sessions (even if already detached)", async () => {
+			const killSpy = mock(async () => {});
+			// biome-ignore lint/suspicious/noExplicitAny: Spy on method for regression coverage
+			(manager as any).kill = killSpy;
+
+			const paneId = "pane-detachall-persistent";
+
+			const persistentSession = {
+				pty: mockPty as unknown as pty.IPty,
+				paneId,
+				workspaceId: "workspace-detachall",
+				cwd: testCwd,
+				cols: 80,
+				rows: 24,
+				lastActive: Date.now(),
+				scrollback: "",
+				isAlive: false,
+				wasRecovered: false,
+				dataBatcher: { dispose: mock(() => {}) },
+				shell: "/bin/sh",
+				startTime: Date.now(),
+				usedFallback: false,
+				isPersistentBackend: true,
+			};
+
+			// biome-ignore lint/suspicious/noExplicitAny: Access private map for regression coverage
+			(manager as any).sessions.set(paneId, persistentSession);
+
+			await manager.detachAll();
+
+			expect(killSpy).not.toHaveBeenCalled();
+			expect(mockPty.kill).toHaveBeenCalled();
+		});
+	});
+
 	describe("getSession", () => {
 		it("should return session metadata", async () => {
 			await manager.createOrAttach({
@@ -479,6 +518,49 @@ describe("TerminalManager", () => {
 			);
 			const stats = await fs.stat(historyDir);
 			expect(stats.isDirectory()).toBe(true);
+		});
+
+		it("should kill tmux sessions for persistent backends when cleaning up", async () => {
+			const originalKillSession = processPersistence.killSession.bind(
+				processPersistence,
+			);
+			const killSessionSpy = mock(async () => {});
+			// biome-ignore lint/suspicious/noExplicitAny: Test needs to monkey-patch for regression coverage
+			(processPersistence as any).killSession = killSessionSpy;
+
+			try {
+				const paneId = "pane-persistent";
+				const workspaceId = "workspace-persistent";
+				const sessionName = getSessionName(workspaceId, paneId);
+
+				const persistentSession = {
+					pty: mockPty as unknown as pty.IPty,
+					paneId,
+					workspaceId,
+					cwd: testCwd,
+					cols: 80,
+					rows: 24,
+					lastActive: Date.now(),
+					scrollback: "",
+					isAlive: false,
+					wasRecovered: false,
+					dataBatcher: { dispose: mock(() => {}) },
+					shell: "/bin/sh",
+					startTime: Date.now(),
+					usedFallback: false,
+					isPersistentBackend: true,
+				};
+
+				// biome-ignore lint/suspicious/noExplicitAny: Access private map for regression coverage
+				(manager as any).sessions.set(paneId, persistentSession);
+
+				await manager.cleanup();
+
+				expect(killSessionSpy).toHaveBeenCalledWith(sessionName);
+			} finally {
+				// biome-ignore lint/suspicious/noExplicitAny: Restore patched method
+				(processPersistence as any).killSession = originalKillSession;
+			}
 		});
 	});
 
@@ -903,6 +985,48 @@ describe("TerminalManager", () => {
 			expect(result3.wasRecovered).toBe(true);
 			expect(result3.scrollback).toContain("Session 1 output");
 			expect(result3.scrollback).toContain("Session 2 output");
+		});
+
+		it("should mark persistent sessions for history deletion", async () => {
+			const originalKillByWorkspace = processPersistence.killByWorkspace.bind(
+				processPersistence,
+			);
+			const killByWorkspaceSpy = mock(async () => {});
+			// biome-ignore lint/suspicious/noExplicitAny: Test needs to monkey-patch for regression coverage
+			(processPersistence as any).killByWorkspace = killByWorkspaceSpy;
+
+			try {
+				const paneId = "pane-persistent-delete";
+				const workspaceId = "workspace-persistent-delete";
+
+				const persistentSession = {
+					pty: mockPty as unknown as pty.IPty,
+					paneId,
+					workspaceId,
+					cwd: testCwd,
+					cols: 80,
+					rows: 24,
+					lastActive: Date.now(),
+					scrollback: "",
+					isAlive: false,
+					wasRecovered: false,
+					dataBatcher: { dispose: mock(() => {}) },
+					shell: "/bin/sh",
+					startTime: Date.now(),
+					usedFallback: false,
+					isPersistentBackend: true,
+				};
+
+				// biome-ignore lint/suspicious/noExplicitAny: Access private map for regression coverage
+				(manager as any).sessions.set(paneId, persistentSession);
+
+				await manager.killByWorkspaceId(workspaceId);
+
+				expect(persistentSession.deleteHistoryOnExit).toBe(true);
+			} finally {
+				// biome-ignore lint/suspicious/noExplicitAny: Restore patched method
+				(processPersistence as any).killByWorkspace = originalKillByWorkspace;
+			}
 		});
 	});
 });
