@@ -37,6 +37,7 @@ import warpIcon from "renderer/assets/app-icons/warp.png";
 import webstormIcon from "renderer/assets/app-icons/webstorm.svg";
 import xcodeIcon from "renderer/assets/app-icons/xcode.svg";
 import { trpc } from "renderer/lib/trpc";
+import { useHotkeyText } from "renderer/stores/hotkeys";
 
 interface AppOption {
 	id: ExternalApp;
@@ -90,6 +91,11 @@ export function OpenInButton({
 }: OpenInButtonProps) {
 	const [isOpen, setIsOpen] = useState(false);
 	const utils = trpc.useUtils();
+	const openInShortcut = useHotkeyText("OPEN_IN_APP");
+	const copyPathShortcut = useHotkeyText("COPY_PATH");
+	const showOpenInShortcut = showShortcuts && openInShortcut !== "Unassigned";
+	const showCopyPathShortcut =
+		showShortcuts && copyPathShortcut !== "Unassigned";
 
 	const { data: lastUsedApp = "cursor" } =
 		trpc.settings.getLastUsedApp.useQuery();
@@ -139,7 +145,9 @@ export function OpenInButton({
 						</Button>
 					</TooltipTrigger>
 					<TooltipContent side="bottom" showArrow={false}>
-						{`Open in ${currentApp.label}${showShortcuts ? " (⌘O)" : ""}`}
+						{`Open in ${currentApp.label}${
+							showOpenInShortcut ? ` (${openInShortcut})` : ""
+						}`}
 					</TooltipContent>
 				</Tooltip>
 			)}
@@ -170,8 +178,10 @@ export function OpenInButton({
 								/>
 								<span>{app.label}</span>
 							</div>
-							{showShortcuts && app.id === lastUsedApp && (
-								<span className="text-xs text-muted-foreground">⌘O</span>
+							{showOpenInShortcut && app.id === lastUsedApp && (
+								<span className="text-xs text-muted-foreground">
+									{openInShortcut}
+								</span>
 							)}
 						</DropdownMenuItem>
 					))}
@@ -199,8 +209,10 @@ export function OpenInButton({
 										/>
 										<span>{app.label}</span>
 									</div>
-									{showShortcuts && app.id === lastUsedApp && (
-										<span className="text-xs text-muted-foreground">⌘O</span>
+									{showOpenInShortcut && app.id === lastUsedApp && (
+										<span className="text-xs text-muted-foreground">
+											{openInShortcut}
+										</span>
 									)}
 								</DropdownMenuItem>
 							))}
@@ -215,8 +227,10 @@ export function OpenInButton({
 							<LuCopy className="size-4" />
 							<span>Copy path</span>
 						</div>
-						{showShortcuts && (
-							<span className="text-xs text-muted-foreground">⌘⇧C</span>
+						{showCopyPathShortcut && (
+							<span className="text-xs text-muted-foreground">
+								{copyPathShortcut}
+							</span>
 						)}
 					</DropdownMenuItem>
 				</DropdownMenuContent>
