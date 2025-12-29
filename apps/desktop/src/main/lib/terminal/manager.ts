@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import os from "node:os";
 import { track } from "main/lib/analytics";
 import { sanitizeTerminalScrollback } from "shared/terminal-scrollback-sanitizer";
+import { ensureAgentHooks } from "../agent-setup/ensure-agent-hooks";
 import { HistoryReader, HistoryWriter } from "../terminal-history";
 import {
 	buildTerminalEnv,
@@ -473,14 +474,28 @@ export class TerminalManager extends EventEmitter {
 	): Promise<SessionResult> {
 		const { paneId, workspaceId, initialCommands } = params;
 
+		const agentHooksReady = ensureAgentHooks().catch((error): void => {
+			console.warn("[TerminalManager] Agent hook ensure failed:", error);
+		});
+
 		// Create the session
 		const session = await createSession(params, (id, data) => {
 			this.emit(`data:${id}`, data);
 		});
 
+		// Match agent commands anywhere in the string (handles "cd repo && claude ...")
+		const agentCommandPattern = /\b(claude|codex|opencode)\b/;
+		const shouldAwaitAgentHooks =
+			initialCommands?.some((command) => agentCommandPattern.test(command)) ??
+			false;
+
 		// Set up data handler
-		setupDataHandler(session, initialCommands, session.wasRecovered, () =>
-			reinitializeHistory(session),
+		setupDataHandler(
+			session,
+			initialCommands,
+			session.wasRecovered,
+			() => reinitializeHistory(session),
+			shouldAwaitAgentHooks ? agentHooksReady : undefined,
 		);
 
 		// Set up exit handler with fallback logic

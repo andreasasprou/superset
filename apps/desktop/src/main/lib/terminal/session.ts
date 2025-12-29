@@ -16,6 +16,8 @@ import type { InternalCreateSessionParams, TerminalSession } from "./types";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+/** Max time to wait for agent hooks before running initial commands */
+const AGENT_HOOKS_TIMEOUT_MS = 2000;
 
 export async function recoverScrollback(
 	existingScrollback: string | null,
@@ -216,12 +218,12 @@ export function setupDataHandler(
 	initialCommands: string[] | undefined,
 	wasRecovered: boolean,
 	onHistoryReinit: () => Promise<void>,
+	beforeInitialCommands?: Promise<void>,
 ): void {
-	// Strict boolean - ensure initialCommands is defined and non-empty
-	const shouldRunCommands: boolean =
-		!wasRecovered &&
-		initialCommands !== undefined &&
-		initialCommands.length > 0;
+	const initialCommandString =
+		!wasRecovered && initialCommands && initialCommands.length > 0
+			? `${initialCommands.join(" && ")}\n`
+			: null;
 	let commandsSent = false;
 	let osc7Buffer = "";
 
@@ -234,12 +236,24 @@ export function setupDataHandler(
 		);
 		osc7Buffer = result.newOsc7Buffer;
 
-		if (shouldRunCommands && !commandsSent) {
+		if (initialCommandString && !commandsSent) {
 			commandsSent = true;
 			setTimeout(() => {
-				if (session.isAlive && initialCommands) {
-					const cmdString = `${initialCommands.join(" && ")}\n`;
-					session.pty.write(cmdString);
+				if (session.isAlive) {
+					void (async () => {
+						if (beforeInitialCommands) {
+							const timeout = new Promise<void>((resolve) =>
+								setTimeout(resolve, AGENT_HOOKS_TIMEOUT_MS),
+							);
+							await Promise.race([beforeInitialCommands, timeout]).catch(
+								() => {},
+							);
+						}
+
+						if (session.isAlive) {
+							session.pty.write(initialCommandString);
+						}
+					})();
 				}
 			}, 100);
 		}
