@@ -14,6 +14,7 @@ Rename the core UI hierarchy to match user mental models:
 UI follow-up:
 - Move Group switching from the left sidebar to a small tab strip above the content area
 - Make the left sidebar primarily file-centric (Changes/Pinned/etc.), not a “terminal list”
+- Keep a dedicated **Changes page** for focused reviews (file viewer panes are for “in-flow” context)
 
 This fixes a fundamental UX confusion where "New Terminal" creates a whole new layout instead of adding a terminal.
 
@@ -41,6 +42,7 @@ Longer-term, this structure also sets us up to support higher-level review workf
 
 - Changing the workspace (top bar) model or terminology
 - Reworking terminal lifecycle/persistence beyond what’s required to support the rename/migration
+- Removing the dedicated Changes page (we still want a focused review surface)
 
 ### Terminology Note
 
@@ -175,6 +177,7 @@ Workspace                                Workspace
 - Sidebar becomes stacked sections (Changes, Pinned, Ports, …) so file navigation/actions don’t replace the main content.
 - No “Terminals” list in the sidebar for MVP (terminal panes are navigated in-place via the Mosaic layout + existing pane focus shortcuts).
 - Content area always renders the Mosaic layout (no Tabs/Changes content swap).
+- Provide an “Open Changes” action that navigates to a dedicated **Changes page** for focused reviews.
 
 #### File Viewer Pane (MVP)
 
@@ -260,6 +263,7 @@ Optional follow-up (internal rename): If we later rename internal state (tabs �
 - [ ] Refactor sidebar into stacked sections (Changes, Pinned, Ports, …)
 - [ ] Clicking a file opens/reuses a file viewer pane in the active Group
 - [ ] Remove the content-area mode swap (content always renders the Mosaic layout)
+- [ ] Keep a dedicated Changes page (current `ChangesContent`) for focused review workflows
 
 ### Phase 2: Optional Internal Rename
 
