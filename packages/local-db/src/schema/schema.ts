@@ -150,6 +150,7 @@ export const settings = sqliteTable("settings", {
 	).$type<TerminalLinkBehavior>(),
 	navigationStyle: text("navigation_style").$type<NavigationStyle>(),
 	groupTabsPosition: text("group_tabs_position").$type<GroupTabsPosition>(),
+	terminalPersistence: integer("terminal_persistence", { mode: "boolean" }),
 });
 
 export type InsertSettings = typeof settings.$inferInsert;
