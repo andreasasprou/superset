@@ -3,7 +3,6 @@
 > **Status**: Draft
 > **Author**: Claude + Andreas
 > **Date**: 2025-12-29
-> **Related**: FILE_VIEWER_PANE_SPEC.md (draft; will be added/linked separately)
 
 ## Summary
 
@@ -22,7 +21,7 @@ This fixes a fundamental UX confusion where "New Terminal" creates a whole new l
 
 This is a stepping stone toward a more **Conductor-like** workflow: the ability to view **code (files/diffs)** and **terminals** together in a single window/layout, without constantly switching “modes”.
 
-Concretely, this unblocks the File Viewer work in `FILE_VIEWER_PANE_SPEC.md` by making “files/diffs” a first-class **pane** that can live alongside terminals in the Mosaic layout.
+Concretely, this unblocks a **File Viewer pane** that can live alongside terminals in the Mosaic layout.
 
 This matters most for the “review + feedback loop” workflow:
 - Reviewing code and plans while giving feedback to an AI via the CLI
@@ -173,9 +172,20 @@ Workspace                                Workspace
 
 #### Sidebar (file-centric)
 
-- Sidebar becomes stacked sections (Changes, Pinned, Ports, …) per `FILE_VIEWER_PANE_SPEC.md`.
+- Sidebar becomes stacked sections (Changes, Pinned, Ports, …) so file navigation/actions don’t replace the main content.
 - No “Terminals” list in the sidebar for MVP (terminal panes are navigated in-place via the Mosaic layout + existing pane focus shortcuts).
 - Content area always renders the Mosaic layout (no Tabs/Changes content swap).
+
+#### File Viewer Pane (MVP)
+
+- Add a `file-viewer` pane type that can be opened alongside terminals in the Mosaic layout.
+- Modes:
+  - **Rendered**: markdown rendering for docs/plans
+  - **Raw**: plain text/code view
+  - **Diff**: inline/side-by-side diff for changed files
+- Open behavior: clicking a file in **Changes** or **Pinned** opens/reuses a File Viewer pane in the active Group.
+- Reuse policy: reuse the most-recent unlocked File Viewer pane in the active Group; if none exists, create a new pane via auto-split.
+- Lock/pin: locked panes are not replaced when clicking other files (Pinned files default to locked).
 
 ### 3. Interaction Flows
 
@@ -196,7 +206,7 @@ Workspace                                Workspace
 #### Opening a File (from Changes or Pinned)
 
 1. Open/reuse a File Viewer pane in the active Group (reuse an unlocked one if present; otherwise create a new pane via auto-split).
-2. Load the file view mode (Rendered/Raw/Diff) per `FILE_VIEWER_PANE_SPEC.md`.
+2. Load the file in the selected view mode (Rendered/Raw/Diff).
 
 ### 4. Group Naming
 
@@ -245,7 +255,7 @@ Optional follow-up (internal rename): If we later rename internal state (tabs �
 - [ ] Make `Cmd+T` / “New Terminal” create a terminal pane in the active Group (fallback: create first Group)
 - [ ] Update UI copy + hotkey labels: “Tab” → “Group” where we mean the layout container
 
-### Phase 1: File-centric Sidebar (pairs with `FILE_VIEWER_PANE_SPEC.md`)
+### Phase 1: File-centric Sidebar + File Viewer Pane
 
 - [ ] Refactor sidebar into stacked sections (Changes, Pinned, Ports, …)
 - [ ] Clicking a file opens/reuses a file viewer pane in the active Group
