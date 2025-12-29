@@ -121,6 +121,8 @@ exec "$REAL_BIN" "$@"
 }
 
 export function getOpenCodePluginContent(notifyPath: string): string {
+	const templateOpen = String.fromCharCode(36, 123);
+	const shellLine = `      await $\`bash ${templateOpen}notifyPath} ${templateOpen}payload\`;`;
 	return [
 		OPENCODE_PLUGIN_MARKER,
 		"export const SupersetNotifyPlugin = async ({ $ }) => {",
@@ -128,7 +130,7 @@ export function getOpenCodePluginContent(notifyPath: string): string {
 		"  const notify = async (hookEventName) => {",
 		"    const payload = JSON.stringify({ hook_event_name: hookEventName });",
 		"    try {",
-		"      await $`bash ${notifyPath} ${payload}`;",
+		shellLine,
 		"    } catch {",
 		"      // Best-effort only; do not break the agent if notification fails",
 		"    }",

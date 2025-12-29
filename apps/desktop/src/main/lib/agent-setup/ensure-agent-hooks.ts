@@ -1,5 +1,4 @@
-import { constants as fsConstants } from "node:fs";
-import { promises as fs } from "node:fs";
+import { promises as fs, constants as fsConstants } from "node:fs";
 import {
 	buildClaudeWrapperScript,
 	buildCodexWrapperScript,
@@ -76,7 +75,7 @@ async function ensureClaudeSettings(): Promise<void> {
 	const notifyPath = getNotifyScriptPath();
 	const existing = await readFileIfExists(settingsPath);
 
-	if (!existing || !existing.includes("\"hooks\"")) {
+	if (!existing || !existing.includes('"hooks"')) {
 		const content = getClaudeSettingsContent(notifyPath);
 		await fs.writeFile(settingsPath, content, { mode: 0o644 });
 		console.log("[agent-setup] Rewrote Claude settings");
