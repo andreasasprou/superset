@@ -1,6 +1,10 @@
 import { Label } from "@superset/ui/label";
+import { toast } from "@superset/ui/sonner";
 import { Switch } from "@superset/ui/switch";
 import { trpc } from "renderer/lib/trpc";
+
+const TERMINAL_PERSISTENCE_TOAST_KEY =
+	"superset.desktop.toast.terminal-session-persistence.enabled.v1";
 
 export function BehaviorSettings() {
 	const utils = trpc.useUtils();
@@ -53,6 +57,23 @@ export function BehaviorSettings() {
 			},
 			onSettled: () => {
 				utils.settings.getTerminalSessionPersistence.invalidate();
+			},
+			onSuccess: (_data, variables) => {
+				if (!variables.enabled) return;
+
+				try {
+					const alreadyShown =
+						localStorage.getItem(TERMINAL_PERSISTENCE_TOAST_KEY) === "1";
+					if (alreadyShown) return;
+
+					toast.info("Terminal persistence enabled", {
+						description:
+							"Existing terminals won’t persist across restarts. Open a new terminal to use tmux persistence.",
+					});
+					localStorage.setItem(TERMINAL_PERSISTENCE_TOAST_KEY, "1");
+				} catch {
+					// localStorage may be unavailable (e.g. privacy mode) — ignore
+				}
 			},
 		});
 
@@ -111,6 +132,9 @@ export function BehaviorSettings() {
 						<p className="text-xs text-muted-foreground">
 							Uses tmux to keep terminal processes alive when you quit and
 							reopen Superset (experimental).
+						</p>
+						<p className="text-xs text-muted-foreground">
+							Only affects terminals opened after enabling.
 						</p>
 						{!terminalPersistenceEnabled && !canEnableTerminalPersistence && (
 							<p className="text-xs text-muted-foreground">
