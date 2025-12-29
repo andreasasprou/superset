@@ -87,6 +87,10 @@ None currently. If implementation work surfaces new ambiguity, add it here as an
   Rationale: Matches intent most of the time (review wants diffs, plans/docs want rendered markdown) while keeping the escape hatch (mode toggle) in the pane header.
   Date/Author: 2025-12-29 / Agent recommendation (confirm during implementation)
 
+- Decision (DL-008): File Viewer “raw/rendered” reads are size-capped and binary-safe.
+  Rationale: Prevents UI lockups and accidental display of binary content; keeps file viewing responsive even in large repos.
+  Date/Author: 2025-12-29 / Agent recommendation (confirm during implementation)
+
 
 ## Outcomes & Retrospective
 
@@ -131,7 +135,9 @@ Primary design reference:
 
 Milestone 1: Introduce workspace-level `Workbench | Review` mode and keep Review functional.
 
-The first milestone establishes the new hierarchy: “Review” is a workspace-global mode, not a sidebar mode. Implement a new per-workspace state value (for example `workspaceViewModeByWorkspaceId: Record<string, "workbench" | "review">`) and render it as a toggle in the workspace header (`WorkspaceActionBar`). Then wire `WorkspaceView` / `ContentView` so that `Review` shows the existing Changes page experience (Changes list in sidebar + diff/actions in content). This milestone is complete when a user can toggle between Workbench and Review and still see the current Changes experience in Review.
+The first milestone establishes the new hierarchy: “Review” is a workspace-global mode, not a sidebar mode. Implement a new renderer store that persists per-workspace view mode via local storage (consistent with `changes-store` and `sidebar-store`). Concretely, add `apps/desktop/src/renderer/stores/workspace-view-mode.ts` with a `viewModeByWorkspaceId: Record<string, "workbench" | "review">`, plus `getWorkspaceViewMode(workspaceId)` and `setWorkspaceViewMode(workspaceId, mode)`. Default to `"workbench"` when no value exists yet.
+
+Render it as a toggle in the workspace header (`WorkspaceActionBar`). Then wire `WorkspaceView` / `ContentView` so that `Review` shows the existing Changes page experience (Changes list in sidebar + diff/actions in content), and `Workbench` shows the Mosaic layout surface. This milestone is complete when a user can toggle between Workbench and Review and still see the current Changes experience in Review.
 
 Milestone 2: Add a Groups strip above Mosaic content in Workbench and migrate Group switching out of the sidebar.
 
@@ -152,6 +158,24 @@ Extend the shared pane type (`apps/desktop/src/shared/tabs-types.ts`) to include
 - Optional metadata to support diff source (against-main, staged, unstaged, committed + commit hash)
 
 Then update `TabView/TabPane` rendering to route `pane.type === "file-viewer"` to a new `FileViewerPane` component. Reuse the existing `DiffViewer` and `MarkdownRenderer` where possible to avoid duplicating functionality.
+
+This milestone also defines the backend reads needed for the file viewer:
+
+- For `viewMode = "diff"`, continue to use the existing `changes.getFileContents` API.
+- For `viewMode = "raw"` / `viewMode = "rendered"`, add a new TRPC procedure to read the current working-tree file safely (size cap, binary detection, and worktree boundary enforcement). The simplest place is `apps/desktop/src/lib/trpc/routers/changes/file-contents.ts` alongside `getFileContents` and `saveFile`:
+  - Procedure name: `changes.readWorkingFile`
+  - Input: `{ worktreePath: string; filePath: string }`
+  - Output: a discriminated result such as:
+    - `{ ok: true; content: string; truncated: boolean; byteLength: number }`
+    - `{ ok: false; reason: "not-found" | "too-large" | "binary" | "outside-worktree" }`
+
+Raw/rendered reads must follow the DL-005 path rules and DL-008 size/binary policy:
+
+- Reject absolute paths, and reject any path that traverses outside the worktree when resolved (including symlink escapes).
+- Enforce a max read size (recommendation: 2 MiB). If above the limit, return `ok: false, reason: "too-large"`; do not attempt partial reads in MVP.
+- Detect likely-binary files by scanning an initial chunk for NUL bytes; if binary, return `ok: false, reason: "binary"`.
+  
+In the `FileViewerPane` UI, these error cases should render a clear non-crashing message (“File is too large to preview”, “Binary file preview not supported”, etc.).
 
 Milestone 5: Wire Workbench file clicks to open/reuse File Viewer panes.
 
@@ -189,8 +213,17 @@ Manual verification checklist for Workbench/Review:
   - Click a file in the Changes section and confirm a file viewer pane opens next to the terminal.
   - Toggle to Review and confirm the same file is selected in the Changes view.
   - Toggle the file viewer mode between Rendered/Raw/Diff and confirm it matches expected behavior.
+- In Workbench, validate file-read error states (size + binary):
+  - Create a too-large file (over 2 MiB) inside the worktree and confirm the File Viewer shows “too large to preview” instead of hanging/crashing.
+  - Create a binary file and confirm the File Viewer shows “binary not supported” instead of rendering garbage.
 - Switch to Review and confirm the focused diff workflow still works (staging, editing, etc.).
 - While in Review, press `Cmd+T` and confirm it switches to Workbench and creates a terminal pane.
+
+Optional helper commands to create “too large” and “binary” test files (run from the repo/worktree root):
+
+  bun -e "import { mkdirSync, writeFileSync } from 'node:fs'; mkdirSync('.tmp/file-viewer', { recursive: true }); writeFileSync('.tmp/file-viewer/too-large.txt', 'a'.repeat(2_100_000));"
+
+  bun -e "import { mkdirSync, writeFileSync } from 'node:fs'; mkdirSync('.tmp/file-viewer', { recursive: true }); writeFileSync('.tmp/file-viewer/binary.bin', Buffer.from([0,1,2,3,0,4]));"
 
 
 ## Validation and Acceptance
@@ -201,6 +234,7 @@ Acceptance is satisfied when a human can verify the following behaviors in a run
 - In Workbench, the Groups strip is the primary way to switch groups; the sidebar is file-centric and does not replace the main content with the Changes page.
 - Clicking a file in Workbench opens or reuses a file viewer pane inside the Mosaic layout without leaving Workbench.
 - Review mode still offers the dedicated Changes page for focused review workflows and remains fully functional.
+- File Viewer raw/rendered reads fail gracefully for too-large and binary files (clear message; no UI lockups).
 
 Project validation:
 
@@ -242,12 +276,17 @@ Backend dependencies:
 
 New/updated interfaces that must exist at the end of implementation (names are suggestions; keep final names consistent with repo conventions):
 
-- A workspace view mode value: `"workbench" | "review"` stored somewhere renderer-accessible (either in `useAppStore` or a dedicated workspace-view store).
+- A workspace view mode value: `"workbench" | "review"` persisted per workspace in `apps/desktop/src/renderer/stores/workspace-view-mode.ts` (local storage).
 - A `GroupStrip` component that can switch/create groups for the active workspace via `useTabsStore`.
 - A `FileViewerPane` Mosaic tile renderer for `pane.type === "file-viewer"`.
-- A main-process file-read helper that accepts a worktree-relative path and refuses absolute paths, `..` traversal, and symlink escapes outside the worktree root.
+- A main-process file-read helper (location flexible) that accepts a worktree-relative path and refuses absolute paths, `..` traversal, and symlink escapes outside the worktree root.
+- A TRPC procedure `changes.readWorkingFile` (or equivalent) that uses that helper and enforces the DL-008 size/binary policy.
 
 
 Plan revision note (2025-12-29): Updated Open Questions and Decision Log with answers for DL-001..DL-003, and added recommended defaults for DL-004/DL-005 so the plan remains self-contained and implementable without further context.
 
 Plan revision note (2025-12-29): Added MVP assumptions about the Workbench sidebar (no terminals list) and captured recommended defaults for `Cmd+T` behavior in Review and File Viewer default mode selection.
+
+Plan revision note (2025-12-29): Added file read behavior details (size/binary policy), specified the intended TRPC surface for raw/rendered reads, and specified a concrete storage location for per-workspace Workbench/Review mode.
+
+Plan revision note (2025-12-29): Added explicit acceptance + manual validation steps for size/binary read failure modes, including optional Bun commands to generate test files.
