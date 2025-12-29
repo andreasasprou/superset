@@ -26,25 +26,7 @@ The main observable outcomes are:
 
 ## Open Questions
 
-1) Should the `Workbench | Review` selection persist per workspace, per window, or globally across the app? (Impacts: Plan of Work, Validation)
-
-   - Decision Log placeholder: DL-001
-
-2) In `Review` mode, do we reuse the existing “Changes in sidebar + diff in content” layout, or do we render a dedicated Review page that contains both the file list and diff within the main content area (and optionally hides the sidebar)? (Impacts: Plan of Work, Validation)
-
-   - Decision Log placeholder: DL-002
-
-3) File Viewer pane reuse and locking policy: when the user clicks files repeatedly from the Workbench sidebar, should we always reuse a single unlocked File Viewer pane (MRU) or create new panes after some threshold? (Impacts: Plan of Work, Acceptance)
-
-   - Decision Log placeholder: DL-003
-
-4) Should “open file from Changes list” in Workbench also update the changes-store selection (so that switching to Review keeps the same selected file), or should Workbench file viewing be fully independent? (Impacts: Plan of Work, Acceptance)
-
-   - Decision Log placeholder: DL-004
-
-5) Security and correctness for file reads: do we constrain File Viewer “raw/rendered” file reads to git-backed reads (`git show`) and working-tree reads (`fs.readFile`) with explicit path validation (no `..`, no absolute, and protect against symlink escape)? (Impacts: Interfaces/Dependencies, Validation)
-
-   - Decision Log placeholder: DL-005
+None currently. If implementation work surfaces new ambiguity, add it here as an acceptance-oriented question and pre-link it to a Decision Log entry.
 
 
 ## Progress
@@ -76,25 +58,25 @@ The main observable outcomes are:
   Rationale: Some workflows need a focused, full-featured changes surface (staging, commit helpers, PR helpers) that is more than an in-flow file viewer pane.
   Date/Author: 2025-12-29 / Andreas + agent
 
-- Decision (DL-001): (unresolved) Persistence scope for `Workbench | Review`.
-  Rationale:
-  Date/Author:
+- Decision (DL-001): Persist `Workbench | Review` per workspace.
+  Rationale: It’s a workspace-local preference (some workspaces are “review-heavy”, others are “dev-heavy”), and avoids a jarring global toggle when multiple workspaces/windows are open.
+  Date/Author: 2025-12-29 / Andreas
 
-- Decision (DL-002): (unresolved) Review mode layout composition.
-  Rationale:
-  Date/Author:
+- Decision (DL-002): In `Review`, reuse the existing “Changes in sidebar + diff in content” layout.
+  Rationale: Preserves the full existing focused-review feature set and reduces risk; Workbench/Review becomes a state/entrypoint change, not a rewrite of the Changes surface.
+  Date/Author: 2025-12-29 / Andreas
 
-- Decision (DL-003): (unresolved) File Viewer reuse/locking policy details.
-  Rationale:
-  Date/Author:
+- Decision (DL-003): File Viewer panes reuse policy is “reuse MRU unlocked pane in active Group; otherwise create a new pane via auto-split”.
+  Rationale: Keeps behavior predictable (one “preview” pane by default) while still supporting multiple concurrent viewers via locking.
+  Date/Author: 2025-12-29 / Andreas
 
-- Decision (DL-004): (unresolved) Whether Workbench file viewing syncs with changes-store selection.
-  Rationale:
-  Date/Author:
+- Decision (DL-004): Workbench “open from Changes list” updates the changes-store selection (for continuity when switching to Review).
+  Rationale: Keeps selection/highlight consistent and makes Workbench → Review feel like “same context, more tools”. Avoid syncing selection for non-change files (e.g., pinned docs) unless the file is also present in Changes.
+  Date/Author: 2025-12-29 / Agent recommendation (confirm during implementation)
 
-- Decision (DL-005): (unresolved) Path validation + symlink behavior for file reads.
-  Rationale:
-  Date/Author:
+- Decision (DL-005): Constrain file reads to the workspace worktree with explicit path validation and symlink-escape protection; use git-backed reads where possible.
+  Rationale: Prevents accidental or hostile reads outside the worktree (e.g., `../.ssh/id_rsa` or symlink escapes) and keeps File Viewer behavior safe and predictable. Implement checks in the main/TRPC boundary, not in renderer code.
+  Date/Author: 2025-12-29 / Agent recommendation (confirm during implementation)
 
 
 ## Outcomes & Retrospective
@@ -140,7 +122,7 @@ Primary design reference:
 
 Milestone 1: Introduce workspace-level `Workbench | Review` mode and keep Review functional.
 
-The first milestone establishes the new hierarchy: “Review” is a workspace-global mode, not a sidebar mode. Implement a new workspace-local state value (for example `workspaceViewMode: "workbench" | "review"`) and render it as a toggle in the workspace header (`WorkspaceActionBar`). Then wire `WorkspaceView` / `ContentView` so that `Review` shows the existing Changes page experience (selected file diff, staging actions, etc.). This milestone is complete when a user can toggle between Workbench and Review and still see the Changes experience in Review.
+The first milestone establishes the new hierarchy: “Review” is a workspace-global mode, not a sidebar mode. Implement a new per-workspace state value (for example `workspaceViewModeByWorkspaceId: Record<string, "workbench" | "review">`) and render it as a toggle in the workspace header (`WorkspaceActionBar`). Then wire `WorkspaceView` / `ContentView` so that `Review` shows the existing Changes page experience (Changes list in sidebar + diff/actions in content). This milestone is complete when a user can toggle between Workbench and Review and still see the current Changes experience in Review.
 
 Milestone 2: Add a Groups strip above Mosaic content in Workbench and migrate Group switching out of the sidebar.
 
@@ -164,7 +146,7 @@ Then update `TabView/TabPane` rendering to route `pane.type === "file-viewer"` t
 
 Milestone 5: Wire Workbench file clicks to open/reuse File Viewer panes.
 
-Update the Workbench “Changes” section so that clicking a file opens it in a file viewer pane in the active group (reusing an unlocked file viewer pane if one exists in that group; otherwise create a new pane via the existing split behavior). Decide whether to synchronize selection into the existing changes store (Open Question DL-004) so that switching to Review keeps context.
+Update the Workbench “Changes” section so that clicking a file opens it in a file viewer pane in the active group (reusing an unlocked file viewer pane if one exists in that group; otherwise create a new pane via the existing split behavior). Also update the existing changes-store selection for that file so that switching to Review retains context.
 
 Milestone 6: Update “New Terminal” behavior and confirm hotkeys remain intuitive.
 
@@ -191,10 +173,11 @@ Manual verification checklist for Workbench/Review:
 - Open the desktop app and ensure a workspace is active.
 - In the workspace header, toggle `Workbench | Review` and confirm:
   - Workbench shows Groups strip + Mosaic content.
-  - Review shows the dedicated Changes experience (focused review surface).
+  - Review shows the existing Changes experience (focused review surface).
 - In Workbench:
   - Click “New Terminal” or press `Cmd+T` and confirm a new terminal pane appears inside the current group.
   - Click a file in the Changes section and confirm a file viewer pane opens next to the terminal.
+  - Toggle to Review and confirm the same file is selected in the Changes view.
   - Toggle the file viewer mode between Rendered/Raw/Diff and confirm it matches expected behavior.
 - Switch to Review and confirm the focused diff workflow still works (staging, editing, etc.).
 
@@ -250,4 +233,7 @@ New/updated interfaces that must exist at the end of implementation (names are s
 - A workspace view mode value: `"workbench" | "review"` stored somewhere renderer-accessible (either in `useAppStore` or a dedicated workspace-view store).
 - A `GroupStrip` component that can switch/create groups for the active workspace via `useTabsStore`.
 - A `FileViewerPane` Mosaic tile renderer for `pane.type === "file-viewer"`.
+- A main-process file-read helper that accepts a worktree-relative path and refuses absolute paths, `..` traversal, and symlink escapes outside the worktree root.
 
+
+Plan revision note (2025-12-29): Updated Open Questions and Decision Log with answers for DL-001..DL-003, and added recommended defaults for DL-004/DL-005 so the plan remains self-contained and implementable without further context.
