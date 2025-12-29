@@ -93,13 +93,15 @@ function loadRenderer(xterm: XTerm): { dispose: () => void } {
 
 export function createTerminalInstance(
 	container: HTMLDivElement,
-	cwd?: string,
+	cwd?: string | (() => string | undefined),
 	initialTheme?: ITheme | null,
 ): {
 	xterm: XTerm;
 	fitAddon: FitAddon;
 	cleanup: () => void;
 } {
+	const getCwd = typeof cwd === "function" ? cwd : () => cwd;
+
 	// Use provided theme, or fall back to localStorage-based default to prevent flash
 	const theme = initialTheme ?? getDefaultTerminalTheme();
 	const options = { ...TERMINAL_OPTIONS, theme };
@@ -146,7 +148,7 @@ export function createTerminalInstance(
 					path,
 					line,
 					column,
-					cwd,
+					cwd: getCwd(),
 				})
 				.catch((error) => {
 					console.error(

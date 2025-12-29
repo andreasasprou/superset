@@ -69,6 +69,8 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 
 	const { data: workspaceCwd } =
 		trpc.terminal.getWorkspaceCwd.useQuery(workspaceId);
+	const fileOpenCwdRef = useRef<string | undefined>(undefined);
+	fileOpenCwdRef.current = terminalCwd ?? workspaceCwd ?? undefined;
 
 	// Seed cwd from initialCwd or workspace path (shell spawns there)
 	// OSC-7 will override if/when the shell reports directory changes
@@ -201,7 +203,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			cleanup: cleanupQuerySuppression,
 		} = createTerminalInstance(
 			container,
-			workspaceCwd,
+			() => fileOpenCwdRef.current,
 			initialThemeRef.current,
 		);
 		xtermRef.current = xterm;
@@ -419,7 +421,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			xtermRef.current = null;
 			searchAddonRef.current = null;
 		};
-	}, [paneId, workspaceId, workspaceCwd]);
+	}, [paneId, workspaceId]);
 
 	useEffect(() => {
 		const xterm = xtermRef.current;
