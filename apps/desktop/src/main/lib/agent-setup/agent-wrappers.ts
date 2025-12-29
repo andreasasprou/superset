@@ -135,6 +135,7 @@ exec "$REAL_BIN" "$@"
 }
 
 export function getOpenCodePluginContent(notifyPath: string): string {
+	// Build "${" via char codes to avoid JS template literal interpolation in generated code
 	const templateOpen = String.fromCharCode(36, 123);
 	const shellLine = `      await $\`bash ${templateOpen}notifyPath} ${templateOpen}payload}\`;`;
 	return [

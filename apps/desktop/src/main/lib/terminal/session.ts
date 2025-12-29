@@ -13,6 +13,8 @@ import type { InternalCreateSessionParams, TerminalSession } from "./types";
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+/** Max time to wait for agent hooks before running initial commands */
+const AGENT_HOOKS_TIMEOUT_MS = 2000;
 
 export async function recoverScrollback(
 	existingScrollback: string | null,
@@ -175,9 +177,8 @@ export function setupDataHandler(
 				if (session.isAlive) {
 					void (async () => {
 						if (beforeInitialCommands) {
-							const timeoutMs = 2000;
 							const timeout = new Promise<void>((resolve) =>
-								setTimeout(resolve, timeoutMs),
+								setTimeout(resolve, AGENT_HOOKS_TIMEOUT_MS),
 							);
 							await Promise.race([beforeInitialCommands, timeout]).catch(
 								() => {},

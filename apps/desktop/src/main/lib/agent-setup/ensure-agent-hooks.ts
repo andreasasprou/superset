@@ -67,7 +67,9 @@ async function ensureScriptFile(params: {
 		return;
 	}
 
-	if (!(await isExecutable(filePath))) {
+	// Only check/fix executability for files that should be executable (0o755)
+	const shouldBeExecutable = (mode & 0o111) !== 0;
+	if (shouldBeExecutable && !(await isExecutable(filePath))) {
 		await fs.chmod(filePath, mode);
 	}
 }
