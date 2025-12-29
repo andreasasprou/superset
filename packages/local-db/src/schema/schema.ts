@@ -144,6 +144,7 @@ export const settings = sqliteTable("settings", {
 		"terminal_link_behavior",
 	).$type<TerminalLinkBehavior>(),
 	navigationStyle: text("navigation_style").$type<NavigationStyle>(),
+	terminalPersistence: integer("terminal_persistence", { mode: "boolean" }),
 });
 
 export type InsertSettings = typeof settings.$inferInsert;
