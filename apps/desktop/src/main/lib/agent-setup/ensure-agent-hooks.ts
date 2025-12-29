@@ -3,10 +3,15 @@ import { promises as fs } from "node:fs";
 import {
 	buildClaudeWrapperScript,
 	buildCodexWrapperScript,
+	buildOpenCodeWrapperScript,
 	getClaudeSettingsContent,
 	getClaudeSettingsPath,
 	getClaudeWrapperPath,
 	getCodexWrapperPath,
+	getOpenCodePluginContent,
+	getOpenCodePluginPath,
+	getOpenCodeWrapperPath,
+	OPENCODE_PLUGIN_MARKER,
 	WRAPPER_MARKER,
 } from "./agent-wrappers";
 import {
@@ -14,7 +19,12 @@ import {
 	getNotifyScriptPath,
 	NOTIFY_SCRIPT_MARKER,
 } from "./notify-hook";
-import { BIN_DIR, HOOKS_DIR } from "./paths";
+import {
+	BIN_DIR,
+	HOOKS_DIR,
+	OPENCODE_CONFIG_DIR,
+	OPENCODE_PLUGIN_DIR,
+} from "./paths";
 
 let inFlight: Promise<void> | null = null;
 
@@ -87,6 +97,8 @@ export function ensureAgentHooks(): Promise<void> {
 
 		await fs.mkdir(BIN_DIR, { recursive: true });
 		await fs.mkdir(HOOKS_DIR, { recursive: true });
+		await fs.mkdir(OPENCODE_CONFIG_DIR, { recursive: true });
+		await fs.mkdir(OPENCODE_PLUGIN_DIR, { recursive: true });
 
 		const notifyPath = getNotifyScriptPath();
 		await ensureScriptFile({
@@ -113,6 +125,22 @@ export function ensureAgentHooks(): Promise<void> {
 			mode: 0o755,
 			marker: WRAPPER_MARKER,
 			logLabel: "Codex wrapper",
+		});
+
+		await ensureScriptFile({
+			filePath: getOpenCodePluginPath(),
+			content: getOpenCodePluginContent(notifyPath),
+			mode: 0o644,
+			marker: OPENCODE_PLUGIN_MARKER,
+			logLabel: "OpenCode plugin",
+		});
+
+		await ensureScriptFile({
+			filePath: getOpenCodeWrapperPath(),
+			content: buildOpenCodeWrapperScript(OPENCODE_CONFIG_DIR),
+			mode: 0o755,
+			marker: WRAPPER_MARKER,
+			logLabel: "OpenCode wrapper",
 		});
 	})().finally(() => {
 		inFlight = null;
