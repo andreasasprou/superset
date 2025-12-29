@@ -38,17 +38,17 @@
       "breakpoints": true
     },
     {
-      "idx": 8,
-      "version": "6",
-      "when": 1767548339097,
-      "tag": "0008_add_group_tabs_position",
-      "breakpoints": true
-    },
-    {
       "idx": 5,
       "version": "6",
       "when": 1767166547886,
       "tag": "0005_add_navigation_style",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1767548339097,
+      "tag": "0008_add_group_tabs_position",
       "breakpoints": true
     }
   ]
