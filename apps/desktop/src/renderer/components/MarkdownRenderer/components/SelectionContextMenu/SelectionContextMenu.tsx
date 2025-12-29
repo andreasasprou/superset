@@ -39,6 +39,8 @@ export function SelectionContextMenu<T extends HTMLElement>({
 			// Fall through to legacy copy method.
 		}
 
+		// Legacy fallback: `execCommand("copy")` copies from the currently-selected input/textarea.
+		// Snapshot the current selection ranges so we can restore the user's selection after copying.
 		const selection = document.getSelection();
 		const savedRanges =
 			selection?.rangeCount && selection.rangeCount > 0
@@ -96,7 +98,9 @@ export function SelectionContextMenu<T extends HTMLElement>({
 
 	const handleCopy = async () => {
 		const selection = window.getSelection();
-		const text = selection?.toString() ?? selectionText;
+		// `selection.toString()` can become "" when interacting with the context menu, even though we captured
+		// the selected text on open; use `||` so Copy still works in that case.
+		const text = selection?.toString() || selectionText;
 		if (!text) return;
 
 		await copyTextToClipboard(text);
