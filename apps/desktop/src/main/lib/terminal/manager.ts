@@ -63,7 +63,7 @@ export class TerminalManager extends EventEmitter {
 	): Promise<SessionResult> {
 		const { paneId, workspaceId, initialCommands } = params;
 
-		void ensureAgentHooks().catch((error) => {
+		const agentHooksReady = ensureAgentHooks().catch((error): void => {
 			console.warn("[TerminalManager] Agent hook ensure failed:", error);
 		});
 
@@ -72,9 +72,23 @@ export class TerminalManager extends EventEmitter {
 			this.emit(`data:${id}`, data);
 		});
 
+		const shouldAwaitAgentHooks =
+			initialCommands?.some((command) => {
+				const firstToken = command.trim().split(/\s+/)[0];
+				return (
+					firstToken === "claude" ||
+					firstToken === "codex" ||
+					firstToken === "opencode"
+				);
+			}) ?? false;
+
 		// Set up data handler
-		setupDataHandler(session, initialCommands, session.wasRecovered, () =>
-			reinitializeHistory(session),
+		setupDataHandler(
+			session,
+			initialCommands,
+			session.wasRecovered,
+			() => reinitializeHistory(session),
+			shouldAwaitAgentHooks ? agentHooksReady : undefined,
 		);
 
 		// Set up exit handler with fallback logic

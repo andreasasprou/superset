@@ -1,4 +1,5 @@
 import { promises as fs, constants as fsConstants } from "node:fs";
+import path from "node:path";
 import {
 	buildClaudeWrapperScript,
 	buildCodexWrapperScript,
@@ -7,6 +8,7 @@ import {
 	getClaudeSettingsPath,
 	getClaudeWrapperPath,
 	getCodexWrapperPath,
+	getOpenCodeGlobalPluginPath,
 	getOpenCodePluginContent,
 	getOpenCodePluginPath,
 	getOpenCodeWrapperPath,
@@ -98,6 +100,17 @@ export function ensureAgentHooks(): Promise<void> {
 		await fs.mkdir(HOOKS_DIR, { recursive: true });
 		await fs.mkdir(OPENCODE_CONFIG_DIR, { recursive: true });
 		await fs.mkdir(OPENCODE_PLUGIN_DIR, { recursive: true });
+		const globalOpenCodePluginPath = getOpenCodeGlobalPluginPath();
+		try {
+			await fs.mkdir(path.dirname(globalOpenCodePluginPath), {
+				recursive: true,
+			});
+		} catch (error) {
+			console.warn(
+				"[agent-setup] Failed to create global OpenCode plugin directory:",
+				error,
+			);
+		}
 
 		const notifyPath = getNotifyScriptPath();
 		await ensureScriptFile({
@@ -133,6 +146,21 @@ export function ensureAgentHooks(): Promise<void> {
 			marker: OPENCODE_PLUGIN_MARKER,
 			logLabel: "OpenCode plugin",
 		});
+
+		try {
+			await ensureScriptFile({
+				filePath: globalOpenCodePluginPath,
+				content: getOpenCodePluginContent(notifyPath),
+				mode: 0o644,
+				marker: OPENCODE_PLUGIN_MARKER,
+				logLabel: "OpenCode global plugin",
+			});
+		} catch (error) {
+			console.warn(
+				"[agent-setup] Failed to write global OpenCode plugin:",
+				error,
+			);
+		}
 
 		await ensureScriptFile({
 			filePath: getOpenCodeWrapperPath(),

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { getNotifyScriptPath } from "./notify-hook";
 import {
@@ -11,7 +12,7 @@ import {
 export const WRAPPER_MARKER = "# Superset agent-wrapper v1";
 export const CLAUDE_SETTINGS_FILE = "claude-settings.json";
 export const OPENCODE_PLUGIN_FILE = "superset-notify.js";
-export const OPENCODE_PLUGIN_MARKER = "// Superset opencode plugin v1";
+export const OPENCODE_PLUGIN_MARKER = "// Superset opencode plugin v2";
 
 const REAL_BINARY_RESOLVER = `find_real_binary() {
   local name="$1"
@@ -53,6 +54,14 @@ export function getClaudeSettingsPath(): string {
 
 export function getOpenCodePluginPath(): string {
 	return path.join(OPENCODE_PLUGIN_DIR, OPENCODE_PLUGIN_FILE);
+}
+
+export function getOpenCodeGlobalPluginPath(): string {
+	const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
+	const configHome = xdgConfigHome?.length
+		? xdgConfigHome
+		: path.join(os.homedir(), ".config");
+	return path.join(configHome, "opencode", "plugin", OPENCODE_PLUGIN_FILE);
 }
 
 export function getClaudeSettingsContent(notifyPath: string): string {
@@ -126,6 +135,12 @@ export function getOpenCodePluginContent(notifyPath: string): string {
 	return [
 		OPENCODE_PLUGIN_MARKER,
 		"export const SupersetNotifyPlugin = async ({ $ }) => {",
+		"  if (globalThis.__supersetOpencodeNotifyPluginV2) return {};",
+		"  globalThis.__supersetOpencodeNotifyPluginV2 = true;",
+		"",
+		"  // Only run inside a Superset terminal session",
+		"  if (!process?.env?.SUPERSET_TAB_ID) return {};",
+		"",
 		`  const notifyPath = "${notifyPath}";`,
 		"  const notify = async (hookEventName) => {",
 		"    const payload = JSON.stringify({ hook_event_name: hookEventName });",
@@ -198,6 +213,16 @@ export function createOpenCodePlugin(): void {
 	const notifyPath = getNotifyScriptPath();
 	const content = getOpenCodePluginContent(notifyPath);
 	fs.writeFileSync(pluginPath, content, { mode: 0o644 });
+	try {
+		const globalPluginPath = getOpenCodeGlobalPluginPath();
+		fs.mkdirSync(path.dirname(globalPluginPath), { recursive: true });
+		fs.writeFileSync(globalPluginPath, content, { mode: 0o644 });
+	} catch (error) {
+		console.warn(
+			"[agent-setup] Failed to write global OpenCode plugin:",
+			error,
+		);
+	}
 	console.log("[agent-setup] Created OpenCode plugin");
 }
 
