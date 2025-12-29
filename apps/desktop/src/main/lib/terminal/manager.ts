@@ -72,15 +72,11 @@ export class TerminalManager extends EventEmitter {
 			this.emit(`data:${id}`, data);
 		});
 
+		// Match agent commands anywhere in the string (handles "cd repo && claude ...")
+		const agentCommandPattern = /\b(claude|codex|opencode)\b/;
 		const shouldAwaitAgentHooks =
-			initialCommands?.some((command) => {
-				const firstToken = command.trim().split(/\s+/)[0];
-				return (
-					firstToken === "claude" ||
-					firstToken === "codex" ||
-					firstToken === "opencode"
-				);
-			}) ?? false;
+			initialCommands?.some((command) => agentCommandPattern.test(command)) ??
+			false;
 
 		// Set up data handler
 		setupDataHandler(

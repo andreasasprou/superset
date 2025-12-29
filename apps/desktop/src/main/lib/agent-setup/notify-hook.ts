@@ -38,7 +38,9 @@ fi
 # Default to "Stop" if not found
 [ -z "$EVENT_TYPE" ] && EVENT_TYPE="Stop"
 
+# Timeouts prevent blocking agent completion if notification server is unresponsive
 curl -sG "http://127.0.0.1:\${SUPERSET_PORT:-${PORTS.NOTIFICATIONS}}/hook/complete" \\
+  --connect-timeout 1 --max-time 2 \\
   --data-urlencode "paneId=$SUPERSET_PANE_ID" \\
   --data-urlencode "tabId=$SUPERSET_TAB_ID" \\
   --data-urlencode "workspaceId=$SUPERSET_WORKSPACE_ID" \\

@@ -56,6 +56,11 @@ export function getOpenCodePluginPath(): string {
 	return path.join(OPENCODE_PLUGIN_DIR, OPENCODE_PLUGIN_FILE);
 }
 
+/**
+ * OpenCode auto-loads plugins from ~/.config/opencode/plugin/
+ * See: https://opencode.ai/docs/plugins
+ * The plugin checks SUPERSET_TAB_ID env var so it only activates in Superset terminals.
+ */
 export function getOpenCodeGlobalPluginPath(): string {
 	const xdgConfigHome = process.env.XDG_CONFIG_HOME?.trim();
 	const configHome = xdgConfigHome?.length
