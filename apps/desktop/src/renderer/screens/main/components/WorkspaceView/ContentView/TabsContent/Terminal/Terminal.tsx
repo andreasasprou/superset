@@ -331,11 +331,11 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 						fitAddon.fit();
 						if (xtermRef.current !== xterm) return;
 
-						// Some full-screen TUIs don't reliably repaint after reattach unless they
-						// receive an actual resize signal. Nudge rows by 1 and revert to force a redraw.
+						// Reattached sessions can sometimes render partially until the user resizes the
+						// pane. Nudge rows by 1 and revert to force a full repaint + TUI redraw.
 						const cols = xterm.cols;
 						const rows = xterm.rows;
-						if (isAlternateScreenRef.current && rows > 2) {
+						if (!result.isNew && rows > 2) {
 							const nudgeRows = rows - 1;
 							xterm.resize(cols, nudgeRows);
 							resizeRef.current({ paneId, cols, rows: nudgeRows });
