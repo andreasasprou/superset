@@ -44,6 +44,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	const [isSearchOpen, setIsSearchOpen] = useState(false);
 	const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
 	const [cwdConfirmed, setCwdConfirmed] = useState(false);
+	const [connectionError, setConnectionError] = useState<string | null>(null);
 	const setFocusedPane = useTabsStore((s) => s.setFocusedPane);
 	const setTabAutoTitle = useTabsStore((s) => s.setTabAutoTitle);
 	const updatePaneCwd = useTabsStore((s) => s.updatePaneCwd);
@@ -176,6 +177,40 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	const unregisterClearCallbackRef = useRef(
 		useTerminalCallbacksStore.getState().unregisterClearCallback,
 	);
+
+	const handleRetryConnection = useCallback(() => {
+		setConnectionError(null);
+		const xterm = xtermRef.current;
+		if (!xterm) return;
+
+		xterm.clear();
+		xterm.writeln("Retrying connection...\r\n");
+
+		createOrAttachRef.current(
+			{
+				paneId,
+				tabId: parentTabIdRef.current || paneId,
+				workspaceId,
+				cols: xterm.cols,
+				rows: xterm.rows,
+			},
+			{
+				onSuccess: (result) => {
+					setConnectionError(null);
+					// Apply rehydration sequences first
+					if (result.snapshot?.rehydrateSequences) {
+						xterm.write(result.snapshot.rehydrateSequences);
+					}
+					xterm.write(result.scrollback);
+					setSubscriptionEnabled(true);
+				},
+				onError: (error) => {
+					setConnectionError(error.message || "Connection failed");
+					setSubscriptionEnabled(true);
+				},
+			},
+		);
+	}, [paneId, workspaceId]);
 
 	const parentTabIdRef = useRef(parentTabId);
 	parentTabIdRef.current = parentTabId;
@@ -337,7 +372,9 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 						setSubscriptionEnabled(true);
 						flushPendingEvents();
 					},
-					onError: () => {
+					onError: (error) => {
+						console.error("[Terminal] Failed to restart:", error);
+						setConnectionError(error.message || "Failed to restart terminal");
 						setSubscriptionEnabled(true);
 					},
 				},
@@ -401,7 +438,9 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 					setSubscriptionEnabled(true);
 					flushPendingEvents();
 				},
-				onError: () => {
+				onError: (error) => {
+					console.error("[Terminal] Failed to create/attach:", error);
+					setConnectionError(error.message || "Failed to connect to terminal");
 					setSubscriptionEnabled(true);
 				},
 			},
@@ -520,6 +559,21 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 				isOpen={isSearchOpen}
 				onClose={() => setIsSearchOpen(false)}
 			/>
+			{connectionError && (
+				<div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/80">
+					<div className="mb-4 px-4 text-center text-red-400">
+						<p className="font-semibold">Connection Error</p>
+						<p className="mt-1 text-sm text-gray-400">{connectionError}</p>
+					</div>
+					<button
+						type="button"
+						onClick={handleRetryConnection}
+						className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white transition-colors hover:bg-blue-700"
+					>
+						Retry Connection
+					</button>
+				</div>
+			)}
 			<div ref={terminalRef} className="h-full w-full" />
 		</div>
 	);

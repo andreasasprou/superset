@@ -45,6 +45,16 @@ import {
 } from "./types";
 
 // =============================================================================
+// Connection State
+// =============================================================================
+
+enum ConnectionState {
+	DISCONNECTED = "disconnected",
+	CONNECTING = "connecting",
+	CONNECTED = "connected",
+}
+
+// =============================================================================
 // Configuration
 // =============================================================================
 
@@ -126,7 +136,7 @@ export class TerminalHostClient extends EventEmitter {
 	private pendingRequests = new Map<string, PendingRequest>();
 	private requestCounter = 0;
 	private authenticated = false;
-	private connecting = false;
+	private connectionState = ConnectionState.DISCONNECTED;
 	private disposed = false;
 
 	// ===========================================================================
@@ -138,22 +148,40 @@ export class TerminalHostClient extends EventEmitter {
 	 * Spawns daemon if needed.
 	 */
 	async ensureConnected(): Promise<void> {
-		if (this.socket && this.authenticated) {
+		// Already connected - fast path
+		if (
+			this.connectionState === ConnectionState.CONNECTED &&
+			this.socket &&
+			this.authenticated
+		) {
 			console.log("[TerminalHostClient] Already connected and authenticated");
 			return;
 		}
 
-		if (this.connecting) {
+		// Another connection in progress - wait with timeout
+		if (this.connectionState === ConnectionState.CONNECTING) {
 			console.log(
 				"[TerminalHostClient] Connection already in progress, waiting...",
 			);
-			// Wait for existing connection attempt
 			return new Promise((resolve, reject) => {
+				const startTime = Date.now();
+				const WAIT_TIMEOUT_MS = 10000; // 10 seconds max wait
+
 				const checkConnection = () => {
-					if (this.socket && this.authenticated) {
+					if (
+						this.connectionState === ConnectionState.CONNECTED &&
+						this.socket &&
+						this.authenticated
+					) {
 						resolve();
-					} else if (!this.connecting) {
-						reject(new Error("Connection failed"));
+					} else if (this.connectionState === ConnectionState.DISCONNECTED) {
+						reject(new Error("Connection failed while waiting"));
+					} else if (Date.now() - startTime > WAIT_TIMEOUT_MS) {
+						reject(
+							new Error(
+								"Timeout waiting for connection - daemon may be unresponsive",
+							),
+						);
 					} else {
 						setTimeout(checkConnection, 100);
 					}
@@ -162,7 +190,7 @@ export class TerminalHostClient extends EventEmitter {
 			});
 		}
 
-		this.connecting = true;
+		this.connectionState = ConnectionState.CONNECTING;
 		console.log("[TerminalHostClient] Connecting to daemon...");
 
 		try {
@@ -190,8 +218,11 @@ export class TerminalHostClient extends EventEmitter {
 			console.log("[TerminalHostClient] Authenticating...");
 			await this.authenticate();
 			console.log("[TerminalHostClient] Authentication successful!");
-		} finally {
-			this.connecting = false;
+
+			this.connectionState = ConnectionState.CONNECTED;
+		} catch (error) {
+			this.connectionState = ConnectionState.DISCONNECTED;
+			throw error;
 		}
 	}
 
@@ -305,6 +336,7 @@ export class TerminalHostClient extends EventEmitter {
 	private handleDisconnect(): void {
 		this.socket = null;
 		this.authenticated = false;
+		this.connectionState = ConnectionState.DISCONNECTED;
 
 		// Reject all pending requests
 		for (const [id, pending] of this.pendingRequests.entries()) {
