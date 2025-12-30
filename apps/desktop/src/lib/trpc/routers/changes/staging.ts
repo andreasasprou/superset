@@ -1,9 +1,8 @@
 import { rm } from "node:fs/promises";
-import { join } from "node:path";
 import simpleGit from "simple-git";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
-import { assertWorktreePathInDb } from "./security";
+import { assertWorktreePathInDb, validatePathInWorktree } from "./security";
 
 export const createStagingRouter = () => {
 	return router({
@@ -19,7 +18,8 @@ export const createStagingRouter = () => {
 				assertWorktreePathInDb(input.worktreePath);
 
 				const git = simpleGit(input.worktreePath);
-				await git.add(input.filePath);
+				// P2: Use -- to prevent paths starting with - from being interpreted as flags
+				await git.add(["--", input.filePath]);
 				return { success: true };
 			}),
 
@@ -88,8 +88,22 @@ export const createStagingRouter = () => {
 				// SECURITY: Validate worktreePath exists in localDb
 				assertWorktreePathInDb(input.worktreePath);
 
-				const fullPath = join(input.worktreePath, input.filePath);
-				await rm(fullPath, { recursive: true, force: true });
+				// SECURITY P0: Validate path is within worktree (prevents traversal/symlink attacks)
+				const validation = await validatePathInWorktree(
+					input.worktreePath,
+					input.filePath,
+				);
+
+				if (!validation.valid) {
+					throw new Error(
+						validation.reason === "outside-worktree"
+							? "Cannot delete files outside worktree"
+							: "File not found",
+					);
+				}
+
+				// Use the resolved path (follows symlinks safely)
+				await rm(validation.resolvedPath, { recursive: true, force: true });
 				return { success: true };
 			}),
 	});

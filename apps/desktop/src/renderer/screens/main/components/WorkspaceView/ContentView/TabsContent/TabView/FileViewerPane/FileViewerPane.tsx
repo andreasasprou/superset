@@ -144,6 +144,9 @@ export function FileViewerPane({
 	);
 	const effectiveBaseBranch = branchData?.defaultBranch ?? "main";
 
+	// Track if we're saving from raw mode to know when to clear draft
+	const savingFromRawRef = useRef(false);
+
 	// Save mutation
 	const saveFileMutation = trpc.changes.saveFile.useMutation({
 		onSuccess: () => {
@@ -152,8 +155,12 @@ export function FileViewerPane({
 			if (editorRef.current) {
 				originalContentRef.current = editorRef.current.getValue();
 			}
-			// P1: Clear draft since content is now saved
-			draftContentRef.current = null;
+			// P1: Only clear draft if we saved from Raw mode (we saved the draft content)
+			// Don't clear if saving from Diff mode as that would discard Raw edits
+			if (savingFromRawRef.current) {
+				draftContentRef.current = null;
+			}
+			savingFromRawRef.current = false;
 			// Invalidate queries to refresh data
 			utils.changes.readWorkingFile.invalidate();
 			utils.changes.getFileContents.invalidate();
@@ -184,6 +191,8 @@ export function FileViewerPane({
 	// Save handler for raw mode editor
 	const handleSaveRaw = useCallback(() => {
 		if (!editorRef.current || !filePath || !worktreePath) return;
+		// Mark that we're saving from Raw mode so onSuccess knows to clear draft
+		savingFromRawRef.current = true;
 		saveFileMutation.mutate({
 			worktreePath,
 			filePath,
@@ -195,6 +204,8 @@ export function FileViewerPane({
 	const handleSaveDiff = useCallback(
 		(content: string) => {
 			if (!filePath || !worktreePath) return;
+			// Not saving from Raw mode - don't clear draft
+			savingFromRawRef.current = false;
 			saveFileMutation.mutate({
 				worktreePath,
 				filePath,
@@ -365,8 +376,11 @@ export function FileViewerPane({
 	const fileName = filePath.split("/").pop() || filePath;
 
 	// P1-3: Only allow editing for staged/unstaged diffs (not committed/against-main)
+	// P1: Also disable Diff editing when a Raw draft exists to prevent silent data loss
+	// User must go back to Raw mode to save their unsaved edits first
+	const hasDraft = draftContentRef.current !== null;
 	const isDiffEditable =
-		diffCategory === "staged" || diffCategory === "unstaged";
+		(diffCategory === "staged" || diffCategory === "unstaged") && !hasDraft;
 
 	// Render content based on view mode
 	const renderContent = () => {
