@@ -1,56 +1,15 @@
-import { lstat, readFile, realpath, writeFile } from "node:fs/promises";
-import {
-	basename,
-	dirname,
-	isAbsolute,
-	join,
-	normalize,
-	relative,
-	sep,
-} from "node:path";
+import { lstat, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { FileContents } from "shared/changes-types";
 import simpleGit from "simple-git";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
-import { validateWorktreePathInDb } from "./security";
+import {
+	validatePathForWrite,
+	validatePathInWorktree,
+	validateWorktreePathInDb,
+} from "./security";
 import { detectLanguage } from "./utils/parse-status";
-
-/**
- * Checks if a normalized path contains directory traversal patterns.
- * Uses segment-aware checks to avoid false positives on paths like "..foo/bar".
- */
-function containsPathTraversal(normalizedPath: string): boolean {
-	// Check if path is exactly ".." or starts with "../" (or "..\\" on Windows)
-	if (normalizedPath === ".." || normalizedPath.startsWith(`..${sep}`)) {
-		return true;
-	}
-	// Check for "/../" or "\..\" anywhere in the path
-	if (normalizedPath.includes(`${sep}..${sep}`)) {
-		return true;
-	}
-	// Check if path ends with "/.." or "\.."
-	if (normalizedPath.endsWith(`${sep}..`)) {
-		return true;
-	}
-	return false;
-}
-
-/**
- * Checks if a relative path escapes outside its base directory.
- * Uses segment-aware checks for cross-platform compatibility.
- */
-function isPathOutsideBase(relativePath: string): boolean {
-	if (isAbsolute(relativePath)) {
-		return true;
-	}
-	// Segment-aware check: path is outside if it equals ".." or starts with "../"
-	return (
-		relativePath === ".." ||
-		relativePath.startsWith(`..${sep}`) ||
-		// Also handle forward slashes on all platforms (relative() may use them)
-		relativePath.startsWith("../")
-	);
-}
 
 /** Maximum file size for reading (2 MiB) */
 const MAX_FILE_SIZE = 2 * 1024 * 1024;
@@ -67,116 +26,6 @@ type ReadWorkingFileResult =
 			ok: false;
 			reason: "not-found" | "too-large" | "binary" | "outside-worktree";
 	  };
-
-/**
- * Validates that a file path is within the worktree and doesn't escape via symlinks.
- * Requires the file to exist (uses realpath).
- */
-async function validatePathInWorktree(
-	worktreePath: string,
-	filePath: string,
-): Promise<{ valid: boolean; resolvedPath?: string; reason?: string }> {
-	// Reject absolute paths
-	if (isAbsolute(filePath)) {
-		return { valid: false, reason: "outside-worktree" };
-	}
-
-	// Normalize and check for traversal using segment-aware check
-	const normalizedPath = normalize(filePath);
-	if (containsPathTraversal(normalizedPath)) {
-		return { valid: false, reason: "outside-worktree" };
-	}
-
-	const fullPath = join(worktreePath, normalizedPath);
-
-	// Resolve symlinks and verify the real path is still within worktree
-	try {
-		const realWorktreePath = await realpath(worktreePath);
-		const realFilePath = await realpath(fullPath);
-		const relativePath = relative(realWorktreePath, realFilePath);
-
-		// Use segment-aware check for relative path
-		if (isPathOutsideBase(relativePath)) {
-			return { valid: false, reason: "outside-worktree" };
-		}
-
-		return { valid: true, resolvedPath: realFilePath };
-	} catch {
-		// File doesn't exist
-		return { valid: false, reason: "not-found" };
-	}
-}
-
-/**
- * Validates that a file path is safe for writing within the worktree.
- * Does not require the file to exist (validates path structure and parent directory).
- * Also checks for symlink escape attacks.
- */
-async function validatePathForWrite(
-	worktreePath: string,
-	filePath: string,
-): Promise<{ valid: boolean; resolvedPath?: string; reason?: string }> {
-	// Reject absolute paths
-	if (isAbsolute(filePath)) {
-		return { valid: false, reason: "outside-worktree" };
-	}
-
-	// Normalize and check for traversal using segment-aware check
-	const normalizedPath = normalize(filePath);
-	if (containsPathTraversal(normalizedPath)) {
-		return { valid: false, reason: "outside-worktree" };
-	}
-
-	const fullPath = join(worktreePath, normalizedPath);
-
-	// Resolve the worktree path and verify our target path is within it
-	try {
-		const realWorktreePath = await realpath(worktreePath);
-
-		// Check if target file exists and is a symlink - reject symlinks to prevent escape
-		try {
-			const stats = await lstat(fullPath);
-			if (stats.isSymbolicLink()) {
-				// File exists and is a symlink - verify target is within worktree
-				const realFilePath = await realpath(fullPath);
-				const relativePath = relative(realWorktreePath, realFilePath);
-				if (isPathOutsideBase(relativePath)) {
-					return { valid: false, reason: "outside-worktree" };
-				}
-				return { valid: true, resolvedPath: realFilePath };
-			}
-		} catch {
-			// File doesn't exist yet - that's fine for writes, continue with parent check
-		}
-
-		// Resolve parent directory to catch symlink escapes in parent path
-		// Use dirname() for cross-platform compatibility (handles both / and \ separators)
-		const parentDir = dirname(fullPath);
-		try {
-			const realParentPath = await realpath(parentDir);
-			const parentRelative = relative(realWorktreePath, realParentPath);
-			if (isPathOutsideBase(parentRelative)) {
-				return { valid: false, reason: "outside-worktree" };
-			}
-			// Construct final path using resolved parent + filename
-			// Use basename() for cross-platform compatibility
-			const fileName = basename(normalizedPath);
-			const candidatePath = join(realParentPath, fileName);
-			return { valid: true, resolvedPath: candidatePath };
-		} catch {
-			// Parent directory doesn't exist - fall back to path validation
-			const candidatePath = join(realWorktreePath, normalizedPath);
-			const relativePath = relative(realWorktreePath, candidatePath);
-			if (isPathOutsideBase(relativePath)) {
-				return { valid: false, reason: "outside-worktree" };
-			}
-			return { valid: true, resolvedPath: candidatePath };
-		}
-	} catch {
-		// Worktree path doesn't exist or isn't accessible
-		return { valid: false, reason: "not-found" };
-	}
-}
 
 /**
  * Detects if a buffer contains binary content by checking for NUL bytes
@@ -251,7 +100,7 @@ export const createFileContentsRouter = () => {
 					input.filePath,
 				);
 
-				if (!validation.valid || !validation.resolvedPath) {
+				if (!validation.valid) {
 					throw new Error(
 						validation.reason === "outside-worktree"
 							? "Cannot write to files outside worktree"
@@ -287,12 +136,10 @@ export const createFileContentsRouter = () => {
 					input.filePath,
 				);
 
-				if (!validation.valid || !validation.resolvedPath) {
+				if (!validation.valid) {
 					return {
 						ok: false,
-						reason: (validation.reason ?? "not-found") as
-							| "not-found"
-							| "outside-worktree",
+						reason: validation.reason,
 					};
 				}
 
