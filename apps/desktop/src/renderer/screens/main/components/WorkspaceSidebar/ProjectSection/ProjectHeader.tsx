@@ -3,6 +3,7 @@ import { LuChevronDown, LuChevronRight } from "react-icons/lu";
 
 interface ProjectHeaderProps {
 	projectName: string;
+	projectColor: string;
 	isCollapsed: boolean;
 	onToggleCollapse: () => void;
 	workspaceCount: number;
@@ -10,6 +11,7 @@ interface ProjectHeaderProps {
 
 export function ProjectHeader({
 	projectName,
+	projectColor,
 	isCollapsed,
 	onToggleCollapse,
 	workspaceCount,
@@ -30,6 +32,10 @@ export function ProjectHeader({
 			) : (
 				<LuChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
 			)}
+			<div
+				className="w-2 h-2 rounded-full shrink-0"
+				style={{ backgroundColor: projectColor }}
+			/>
 			<span className="truncate flex-1">{projectName}</span>
 			<span className="text-xs text-muted-foreground">{workspaceCount}</span>
 		</button>
