@@ -21,6 +21,13 @@ import { portManager } from "./port-manager";
 import type { CreateSessionParams, SessionResult } from "./types";
 
 // =============================================================================
+// Constants
+// =============================================================================
+
+/** Delay before removing session from local cache after exit event */
+const SESSION_CLEANUP_DELAY_MS = 5000;
+
+// =============================================================================
 // Types
 // =============================================================================
 
@@ -93,7 +100,7 @@ export class DaemonTerminalManager extends EventEmitter {
 				// Clean up session after delay
 				setTimeout(() => {
 					this.sessions.delete(paneId);
-				}, 5000);
+				}, SESSION_CLEANUP_DELAY_MS);
 			},
 		);
 
