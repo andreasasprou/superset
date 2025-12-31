@@ -83,15 +83,21 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 				// Normalize absolute paths to worktree-relative paths for file viewer
 				// File viewer expects relative paths, but terminal links can be absolute
 				let filePath = path;
-				if (workspaceCwd && path.startsWith(workspaceCwd)) {
-					filePath = path.slice(workspaceCwd.length).replace(/^\//, "");
-				} else if (path.startsWith("/")) {
-					// Absolute path outside workspace - still try to open it
-					// but warn in console as it may fail validation
-					console.warn(
-						"[Terminal] Opening absolute path outside workspace:",
-						path,
-					);
+				if (workspaceCwd) {
+					// Use path boundary check to avoid incorrect prefix stripping
+					// e.g., /repo vs /repo-other should not match
+					if (path === workspaceCwd) {
+						filePath = ".";
+					} else if (path.startsWith(workspaceCwd + "/")) {
+						filePath = path.slice(workspaceCwd.length + 1);
+					} else if (path.startsWith("/")) {
+						// Absolute path outside workspace - still try to open it
+						// but warn in console as it may fail validation
+						console.warn(
+							"[Terminal] Opening absolute path outside workspace:",
+							path,
+						);
+					}
 				}
 				addFileViewerPane(workspaceId, { filePath });
 			} else {

@@ -61,8 +61,8 @@ export function MainScreen() {
 
 	const currentView = useCurrentView();
 	const openSettings = useOpenSettings();
-	const { toggleSidebar } = useSidebarStore();
-	const { toggleOpen: toggleWorkspaceSidebar } = useWorkspaceSidebarStore();
+	const toggleSidebar = useSidebarStore((s) => s.toggleSidebar);
+	const toggleWorkspaceSidebar = useWorkspaceSidebarStore((s) => s.toggleOpen);
 	const hasTasksAccess = useFeatureFlagEnabled(
 		FEATURE_FLAGS.ELECTRIC_TASKS_ACCESS,
 	);
