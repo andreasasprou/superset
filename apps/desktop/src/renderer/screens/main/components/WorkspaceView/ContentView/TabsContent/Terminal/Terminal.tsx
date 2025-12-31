@@ -22,6 +22,7 @@ import {
 	setupResizeHandlers,
 	type TerminalRendererRef,
 } from "./helpers";
+import { useTerminalConnection } from "./hooks";
 import { parseCwd } from "./parseCwd";
 import { TerminalSearch } from "./TerminalSearch";
 import type { TerminalProps, TerminalStreamEvent } from "./types";
@@ -68,13 +69,26 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	const [isSearchOpen, setIsSearchOpen] = useState(false);
 	const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
 	const [cwdConfirmed, setCwdConfirmed] = useState(false);
-	const [connectionError, setConnectionError] = useState<string | null>(null);
 	const setFocusedPane = useTabsStore((s) => s.setFocusedPane);
 	const setTabAutoTitle = useTabsStore((s) => s.setTabAutoTitle);
 	const updatePaneCwd = useTabsStore((s) => s.updatePaneCwd);
 	const focusedPaneIds = useTabsStore((s) => s.focusedPaneIds);
 	const addFileViewerPane = useTabsStore((s) => s.addFileViewerPane);
 	const terminalTheme = useTerminalTheme();
+
+	// Terminal connection state and mutations (extracted to hook for cleaner code)
+	const {
+		connectionError,
+		setConnectionError,
+		workspaceCwd,
+		refs: {
+			createOrAttach: createOrAttachRef,
+			write: writeRef,
+			resize: resizeRef,
+			detach: detachRef,
+			clearScrollback: clearScrollbackRef,
+		},
+	} = useTerminalConnection({ workspaceId });
 
 	// Ref for initial theme to avoid recreating terminal on theme change
 	const initialThemeRef = useRef(terminalTheme);
@@ -108,9 +122,6 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	paneInitialCommandsRef.current = paneInitialCommands;
 	paneInitialCwdRef.current = paneInitialCwd;
 	clearPaneInitialDataRef.current = clearPaneInitialData;
-
-	const { data: workspaceCwd } =
-		trpc.terminal.getWorkspaceCwd.useQuery(workspaceId);
 
 	// Use ref for workspaceCwd to avoid terminal recreation when query loads
 	// (changing from undefined→string triggers useEffect, causing xterm errors)
@@ -199,23 +210,6 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	// Ref to use cwd parser inside effect
 	const updateCwdRef = useRef(updateCwdFromData);
 	updateCwdRef.current = updateCwdFromData;
-
-	const createOrAttachMutation = trpc.terminal.createOrAttach.useMutation();
-	const writeMutation = trpc.terminal.write.useMutation();
-	const resizeMutation = trpc.terminal.resize.useMutation();
-	const detachMutation = trpc.terminal.detach.useMutation();
-	const clearScrollbackMutation = trpc.terminal.clearScrollback.useMutation();
-
-	const createOrAttachRef = useRef(createOrAttachMutation.mutate);
-	const writeRef = useRef(writeMutation.mutate);
-	const resizeRef = useRef(resizeMutation.mutate);
-	const detachRef = useRef(detachMutation.mutate);
-	const clearScrollbackRef = useRef(clearScrollbackMutation.mutate);
-	createOrAttachRef.current = createOrAttachMutation.mutate;
-	writeRef.current = writeMutation.mutate;
-	resizeRef.current = resizeMutation.mutate;
-	detachRef.current = detachMutation.mutate;
-	clearScrollbackRef.current = clearScrollbackMutation.mutate;
 
 	const registerClearCallbackRef = useRef(
 		useTerminalCallbacksStore.getState().registerClearCallback,
