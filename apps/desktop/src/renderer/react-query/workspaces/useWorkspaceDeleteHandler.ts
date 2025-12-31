@@ -50,9 +50,11 @@ export function useWorkspaceDeleteHandler({
 			const { data: canDeleteData } = await canDeleteQuery.refetch();
 
 			if (isBranchWorkspace) {
+				// Show dialog if we couldn't get data (safe default) or there are active terminals
 				if (
-					canDeleteData?.activeTerminalCount &&
-					canDeleteData.activeTerminalCount > 0
+					!canDeleteData ||
+					(canDeleteData.activeTerminalCount &&
+						canDeleteData.activeTerminalCount > 0)
 				) {
 					setShowDeleteDialog(true);
 				} else {
@@ -68,8 +70,10 @@ export function useWorkspaceDeleteHandler({
 				return;
 			}
 
+			// Only skip dialog if we have data confirming it's safe to delete
 			const isEmpty =
-				canDeleteData?.canDelete &&
+				canDeleteData &&
+				canDeleteData.canDelete &&
 				canDeleteData.activeTerminalCount === 0 &&
 				!canDeleteData.warning &&
 				!canDeleteData.hasChanges &&
