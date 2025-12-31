@@ -12,7 +12,6 @@ import {
 	HoverCardTrigger,
 } from "@superset/ui/hover-card";
 import { Input } from "@superset/ui/input";
-import { toast } from "@superset/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
 import { cn } from "@superset/ui/utils";
 import { useState } from "react";
@@ -21,15 +20,22 @@ import { HiMiniXMark } from "react-icons/hi2";
 import { LuGitBranch } from "react-icons/lu";
 import { trpc } from "renderer/lib/trpc";
 import {
-	useDeleteWorkspace,
 	useReorderWorkspaces,
 	useSetActiveWorkspace,
+	useWorkspaceDeleteHandler,
 } from "renderer/react-query/workspaces";
 import { BranchSwitcher } from "renderer/screens/main/components/TopBar/WorkspaceTabs/BranchSwitcher";
 import { DeleteWorkspaceDialog } from "renderer/screens/main/components/TopBar/WorkspaceTabs/DeleteWorkspaceDialog";
 import { useWorkspaceRename } from "renderer/screens/main/components/TopBar/WorkspaceTabs/useWorkspaceRename";
 import { WorkspaceHoverCardContent } from "renderer/screens/main/components/TopBar/WorkspaceTabs/WorkspaceHoverCard";
 import { useTabsStore } from "renderer/stores/tabs/store";
+import { extractPaneIdsFromLayout } from "renderer/stores/tabs/utils";
+import {
+	GITHUB_STATUS_STALE_TIME,
+	HOVER_CARD_CLOSE_DELAY,
+	HOVER_CARD_OPEN_DELAY,
+	MAX_KEYBOARD_SHORTCUT_INDEX,
+} from "./constants";
 import { WorkspaceDiffStats } from "./WorkspaceDiffStats";
 import { WorkspaceStatusBadge } from "./WorkspaceStatusBadge";
 
@@ -61,48 +67,29 @@ export function WorkspaceListItem({
 	const isBranchWorkspace = type === "branch";
 	const setActiveWorkspace = useSetActiveWorkspace();
 	const reorderWorkspaces = useReorderWorkspaces();
-	const deleteWorkspace = useDeleteWorkspace();
 	const [hasHovered, setHasHovered] = useState(false);
-	const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 	const rename = useWorkspaceRename(id, name);
 	const tabs = useTabsStore((s) => s.tabs);
 	const panes = useTabsStore((s) => s.panes);
 	const openInFinder = trpc.external.openInFinder.useMutation();
 
-	// Query to check if workspace can be deleted
-	const canDeleteQuery = trpc.workspaces.canDelete.useQuery(
-		{ id },
-		{ enabled: false },
-	);
+	// Shared delete logic
+	const { showDeleteDialog, setShowDeleteDialog, handleDeleteClick } =
+		useWorkspaceDeleteHandler({ id, name, type });
 
 	// Lazy-load GitHub status on hover to avoid N+1 queries
 	const { data: githubStatus } = trpc.workspaces.getGitHubStatus.useQuery(
 		{ workspaceId: id },
 		{
 			enabled: hasHovered && type === "worktree",
-			staleTime: 30_000,
+			staleTime: GITHUB_STATUS_STALE_TIME,
 		},
 	);
 
 	// Check if any pane in tabs belonging to this workspace needs attention
 	const workspaceTabs = tabs.filter((t) => t.workspaceId === id);
 	const workspacePaneIds = new Set(
-		workspaceTabs.flatMap((t) => {
-			const collectPaneIds = (node: unknown): string[] => {
-				if (typeof node === "string") return [node];
-				if (
-					node &&
-					typeof node === "object" &&
-					"first" in node &&
-					"second" in node
-				) {
-					const b = node as { first: unknown; second: unknown };
-					return [...collectPaneIds(b.first), ...collectPaneIds(b.second)];
-				}
-				return [];
-			};
-			return collectPaneIds(t.layout);
-		}),
+		workspaceTabs.flatMap((t) => extractPaneIdsFromLayout(t.layout)),
 	);
 	const needsAttention = Object.values(panes)
 		.filter((p) => workspacePaneIds.has(p.id))
@@ -123,56 +110,6 @@ export function WorkspaceListItem({
 	const handleOpenInFinder = () => {
 		if (worktreePath) {
 			openInFinder.mutate(worktreePath);
-		}
-	};
-
-	const handleDeleteClick = async (e: React.MouseEvent) => {
-		e.stopPropagation();
-		if (deleteWorkspace.isPending || canDeleteQuery.isFetching) return;
-
-		try {
-			const { data: canDeleteData } = await canDeleteQuery.refetch();
-
-			if (isBranchWorkspace) {
-				if (
-					canDeleteData?.activeTerminalCount &&
-					canDeleteData.activeTerminalCount > 0
-				) {
-					setShowDeleteDialog(true);
-				} else {
-					toast.promise(deleteWorkspace.mutateAsync({ id }), {
-						loading: `Closing "${name}"...`,
-						success: `Workspace "${name}" closed`,
-						error: (error) =>
-							error instanceof Error
-								? `Failed to close workspace: ${error.message}`
-								: "Failed to close workspace",
-					});
-				}
-				return;
-			}
-
-			const isEmpty =
-				canDeleteData?.canDelete &&
-				canDeleteData.activeTerminalCount === 0 &&
-				!canDeleteData.warning &&
-				!canDeleteData.hasChanges &&
-				!canDeleteData.hasUnpushedCommits;
-
-			if (isEmpty) {
-				toast.promise(deleteWorkspace.mutateAsync({ id }), {
-					loading: `Deleting "${name}"...`,
-					success: `Workspace "${name}" deleted`,
-					error: (error) =>
-						error instanceof Error
-							? `Failed to delete workspace: ${error.message}`
-							: "Failed to delete workspace",
-				});
-			} else {
-				setShowDeleteDialog(true);
-			}
-		} catch {
-			setShowDeleteDialog(true);
 		}
 	};
 
@@ -285,11 +222,12 @@ export function WorkspaceListItem({
 			)}
 
 			{/* Keyboard shortcut indicator */}
-			{shortcutIndex !== undefined && shortcutIndex < 9 && (
-				<span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity font-mono shrink-0">
-					⌘{shortcutIndex + 1}
-				</span>
-			)}
+			{shortcutIndex !== undefined &&
+				shortcutIndex < MAX_KEYBOARD_SHORTCUT_INDEX && (
+					<span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity font-mono shrink-0">
+						⌘{shortcutIndex + 1}
+					</span>
+				)}
 
 			{/* Close button for worktree workspaces */}
 			{!isBranchWorkspace && (
@@ -342,7 +280,10 @@ export function WorkspaceListItem({
 
 	return (
 		<>
-			<HoverCard openDelay={400} closeDelay={100}>
+			<HoverCard
+				openDelay={HOVER_CARD_OPEN_DELAY}
+				closeDelay={HOVER_CARD_CLOSE_DELAY}
+			>
 				<ContextMenu>
 					<HoverCardTrigger asChild>
 						<ContextMenuTrigger asChild>{content}</ContextMenuTrigger>
