@@ -108,18 +108,39 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	const scheduleRedraw = useCallback(() => {
 		if (redrawRafRef.current !== null) return;
 
-		redrawRafRef.current = requestAnimationFrame(() => {
-			redrawRafRef.current = null;
+		let attempt = 0;
+		const MAX_REDRAW_ATTEMPTS = 5;
 
-			const xterm = xtermRef.current;
-			if (!xterm) return;
+		const tick = () => {
+			redrawRafRef.current = requestAnimationFrame(() => {
+				redrawRafRef.current = null;
 
-			const cols = xterm.cols;
-			const rows = xterm.rows;
-			if (cols <= 0 || rows <= 0) return;
+				const xterm = xtermRef.current;
+				if (!xterm) return;
 
-			xterm.refresh(0, rows - 1);
-		});
+				// Avoid refreshing while the terminal is still hidden/laying out (e.g. tab switch),
+				// as WebGL renderers can glitch when asked to render into a 0×0 container.
+				const container = terminalRef.current;
+				const rect = container?.getBoundingClientRect();
+				if (
+					rect &&
+					(rect.width < 10 || rect.height < 10) &&
+					attempt < MAX_REDRAW_ATTEMPTS
+				) {
+					attempt += 1;
+					tick();
+					return;
+				}
+
+				const cols = xterm.cols;
+				const rows = xterm.rows;
+				if (cols <= 0 || rows <= 0) return;
+
+				xterm.refresh(0, rows - 1);
+			});
+		};
+
+		tick();
 	}, []);
 
 	useEffect(() => {
