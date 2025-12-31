@@ -67,10 +67,33 @@ export type TerminalRenderer = {
 	clearTextureAtlas?: () => void;
 };
 
+type PreferredRenderer = TerminalRenderer["kind"] | "auto";
+
+function getPreferredRenderer(): PreferredRenderer {
+	try {
+		const stored = localStorage.getItem("terminal-renderer");
+		if (stored === "webgl" || stored === "canvas" || stored === "dom") {
+			return stored;
+		}
+	} catch {
+		// ignore
+	}
+
+	// Default: avoid xterm-webgl on macOS. We've seen repeated corruption/glitching
+	// when terminals are hidden/shown or switched between panes.
+	return navigator.userAgent.includes("Macintosh") ? "canvas" : "webgl";
+}
+
 function loadRenderer(xterm: XTerm): TerminalRenderer {
 	let renderer: WebglAddon | CanvasAddon | null = null;
 	let webglAddon: WebglAddon | null = null;
 	let kind: TerminalRenderer["kind"] = "dom";
+
+	const preferred = getPreferredRenderer();
+
+	if (preferred === "dom") {
+		return { kind: "dom", dispose: () => {}, clearTextureAtlas: undefined };
+	}
 
 	const tryLoadCanvas = () => {
 		try {
@@ -81,6 +104,15 @@ function loadRenderer(xterm: XTerm): TerminalRenderer {
 			// Canvas fallback failed, use default renderer
 		}
 	};
+
+	if (preferred === "canvas") {
+		tryLoadCanvas();
+		return {
+			kind,
+			dispose: () => renderer?.dispose(),
+			clearTextureAtlas: undefined,
+		};
+	}
 
 	try {
 		webglAddon = new WebglAddon();
