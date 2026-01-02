@@ -248,6 +248,40 @@ const result = await window.ipcRenderer.invoke("my-channel", {
   - `types.ts` - Data models
   - `ipc-channels.ts` - IPC type definitions
 
+### Fork Release Workflow (andreasasprou/superset)
+
+This branch (`release`) is configured for independent releases from the fork.
+
+**How it works:**
+1. Push to `release` branch (paths: `apps/desktop/**`) triggers workflow
+2. Or manually trigger via `gh workflow run "Release Desktop App" --repo andreasasprou/superset --ref release`
+3. Workflow auto-bumps version, creates tag, builds, signs, notarizes, releases
+
+**Auto-updates:**
+- Feed URL: `https://github.com/andreasasprou/superset/releases/latest/download`
+- Checks every 4 hours, auto-downloads, notifies when ready
+- Users on v1.0.x will auto-update to new releases
+
+**Monitoring builds:**
+```bash
+# Check recent runs
+gh run list --repo andreasasprou/superset --limit 5
+
+# View specific run
+gh run view <RUN_ID> --repo andreasasprou/superset
+
+# Watch live (use background_task for agents)
+gh run watch <RUN_ID> --repo andreasasprou/superset
+```
+
+**Agent note:** When monitoring GitHub Actions workflows, use `background_task` instead of blocking `gh run watch`. This keeps the conversation responsive while builds complete.
+
+**Key files:**
+- `.github/workflows/release-desktop.yml` - Release workflow
+- `apps/desktop/electron-builder.ts` - Build config (owner: andreasasprou)
+- `apps/desktop/src/main/lib/auto-updater.ts` - Auto-update feed URL
+- `docs/FORK_RELEASE_PLAN.md` - Full implementation plan
+
 ### Environment Variable Loading
 
 The desktop app loads environment variables from the monorepo root `.env` file:
