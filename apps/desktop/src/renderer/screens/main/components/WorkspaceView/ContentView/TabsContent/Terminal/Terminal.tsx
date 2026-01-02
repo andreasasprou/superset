@@ -335,7 +335,6 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 				}
 			}
 		}
-		// biome-ignore lint/correctness/useExhaustiveDependencies: refs used intentionally to avoid recreating callback
 	}, [setConnectionError]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: refs (resizeRef, updateCwdRef, rendererRef) used intentionally to read latest values without recreating callback
@@ -428,9 +427,9 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 						// Filter out alt-screen sequences since we already entered
 						const ESC = "\x1b";
 						const filteredRehydrate = result.snapshot.rehydrateSequences
-							.split(ESC + "[?1049h")
+							.split(`${ESC}[?1049h`)
 							.join("")
-							.split(ESC + "[?47h")
+							.split(`${ESC}[?47h`)
 							.join("");
 						if (filteredRehydrate) {
 							xterm.write(filteredRehydrate);
