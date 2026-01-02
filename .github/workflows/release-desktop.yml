@@ -38,7 +38,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Prevent infinite loop: skip if this commit was made by the bot
       - name: Check if triggered by version bump
         id: check
         run: |
@@ -69,7 +68,6 @@ jobs:
         run: |
           cd apps/desktop
           
-          # Get current version
           CURRENT=$(jq -r '.version' package.json)
           echo "Current version: $CURRENT"
           
@@ -77,38 +75,29 @@ jobs:
             NEW=$CURRENT
             echo "Skipping version bump, using: $NEW"
           else
-            # Increment patch version (1.0.5 → 1.0.6)
             NEW=$(echo $CURRENT | awk -F. '{print $1"."$2"."$3+1}')
             echo "New version: $NEW"
           fi
           
           TAG="v$NEW"
           
-          # FAIL FAST if tag already exists (prevents building wrong code)
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "::error::Tag $TAG already exists! Manually bump version in package.json or delete the existing tag."
             exit 1
           fi
           
           if [[ "${{ inputs.skip_version_bump }}" != "true" ]]; then
-            # Update package.json
             jq --arg v "$NEW" '.version = $v' package.json > tmp.json && mv tmp.json package.json
-            
-            # Update lockfile to reflect version change (go to repo root)
             cd ../..
             bun install --no-save
-            
-            # Commit version bump AND lockfile
             git add apps/desktop/package.json bun.lock
             git commit -m "chore: bump desktop version to $NEW [skip ci]"
             git push origin release
           fi
           
-          # Capture the exact SHA we're tagging
           SHA=$(git rev-parse HEAD)
           echo "Tagging SHA: $SHA"
           
-          # Create and push tag on this exact SHA
           git tag "$TAG" "$SHA"
           git push origin "$TAG"
           
@@ -127,8 +116,7 @@ jobs:
     name: Build - macOS (${{ matrix.arch }})
     needs: version
     if: needs.version.outputs.sha != ''
-    runs-on: macos-latest
-    # environment: production  # Optional: uncomment to require approval before builds
+    runs-on: macos-latest-xlarge  # 3x faster runner
 
     strategy:
       fail-fast: false
@@ -156,14 +144,39 @@ jobs:
         with:
           bun-version: '1.3.2'
 
+      # Cache Electron & electron-builder binaries (~113MB)
+      - name: Cache Electron
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/.electron-gyp
+          key: ${{ runner.os }}-electron-${{ hashFiles('apps/desktop/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      # Cache Turbo build outputs
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-
+
+      # Cache all dependencies
       - name: Cache dependencies
         uses: actions/cache@v4
         with:
           path: |
             ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ needs.version.outputs.sha }}
+            node_modules
+            apps/*/node_modules
+            packages/*/node_modules
+          key: ${{ runner.os }}-deps-${{ hashFiles('bun.lock') }}
           restore-keys: |
-            ${{ runner.os }}-bun-
+            ${{ runner.os }}-deps-
 
       - name: Install dependencies
         run: bun install
@@ -254,8 +267,6 @@ jobs:
           echo "Release artifacts:"
           ls -la
 
-      # IMPORTANT: draft: false is required for auto-updates to work
-      # The /releases/latest/download URL only serves PUBLISHED releases
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
