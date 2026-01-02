@@ -116,7 +116,7 @@ jobs:
     name: Build - macOS (${{ matrix.arch }})
     needs: version
     if: needs.version.outputs.sha != ''
-    runs-on: macos-latest-xlarge  # 3x faster runner
+    runs-on: macos-latest  # Free tier runner (xlarge requires paid plan)
 
     strategy:
       fail-fast: false
