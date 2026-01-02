@@ -27,8 +27,12 @@ import { createSession, type Session } from "./session";
 // TerminalHost Class
 // =============================================================================
 
+/** Timeout for force-disposing sessions that don't exit after kill */
+const KILL_TIMEOUT_MS = 5000;
+
 export class TerminalHost {
 	private sessions: Map<string, Session> = new Map();
+	private killTimers: Map<string, NodeJS.Timeout> = new Map();
 
 	/**
 	 * Create or attach to a terminal session
@@ -41,6 +45,19 @@ export class TerminalHost {
 
 		let session = this.sessions.get(sessionId);
 		let isNew = false;
+
+		// If session is terminating (kill was called but PTY hasn't exited yet),
+		// force-dispose it and create a fresh session. This prevents race conditions
+		// where createOrAttach is called immediately after kill.
+		if (session?.isTerminating) {
+			console.log(
+				`[TerminalHost] Session ${sessionId} is terminating, force-disposing for fresh start`,
+			);
+			session.dispose();
+			this.sessions.delete(sessionId);
+			this.clearKillTimer(sessionId);
+			session = undefined;
+		}
 
 		// If session exists but is dead, dispose it and create a new one
 		if (session && !session.isAlive) {
@@ -112,19 +129,21 @@ export class TerminalHost {
 	}
 
 	/**
-	 * Write data to a terminal session
+	 * Write data to a terminal session.
+	 * Throws if session is not found or is terminating.
 	 */
 	write(request: WriteRequest): EmptyResponse {
-		const session = this.getSession(request.sessionId);
+		const session = this.getActiveSession(request.sessionId);
 		session.write(request.data);
 		return { success: true };
 	}
 
 	/**
-	 * Resize a terminal session
+	 * Resize a terminal session.
+	 * Throws if session is not found or is terminating.
 	 */
 	resize(request: ResizeRequest): EmptyResponse {
-		const session = this.getSession(request.sessionId);
+		const session = this.getActiveSession(request.sessionId);
 		session.resize(request.cols, request.rows);
 		return { success: true };
 	}
@@ -146,14 +165,42 @@ export class TerminalHost {
 	}
 
 	/**
-	 * Kill a terminal session
+	 * Kill a terminal session.
+	 * The session is marked as terminating immediately (non-attachable).
+	 * A fail-safe timer ensures cleanup even if the PTY never exits.
 	 */
 	kill(request: KillRequest): EmptyResponse {
-		const session = this.sessions.get(request.sessionId);
-		if (session) {
-			session.kill();
-			// Session will be removed on exit event
+		const { sessionId } = request;
+		const session = this.sessions.get(sessionId);
+
+		console.log(
+			`[TerminalHost] kill(${sessionId}): found=${!!session}, isTerminating=${session?.isTerminating}, isAlive=${session?.isAlive}`,
+		);
+
+		if (!session) {
+			return { success: true };
 		}
+
+		session.kill();
+		console.log(`[TerminalHost] kill(${sessionId}): session.kill() called`);
+
+		// Set up fail-safe timer to force-dispose if exit never fires.
+		// This prevents zombie sessions if the PTY process hangs.
+		if (!this.killTimers.has(sessionId)) {
+			const timer = setTimeout(() => {
+				const s = this.sessions.get(sessionId);
+				if (s?.isTerminating) {
+					console.warn(
+						`[TerminalHost] Force disposing stuck session ${sessionId} after ${KILL_TIMEOUT_MS}ms`,
+					);
+					s.dispose();
+					this.sessions.delete(sessionId);
+				}
+				this.killTimers.delete(sessionId);
+			}, KILL_TIMEOUT_MS);
+			this.killTimers.set(sessionId, timer);
+		}
+
 		return { success: true };
 	}
 
@@ -169,14 +216,17 @@ export class TerminalHost {
 	}
 
 	/**
-	 * List all sessions
+	 * List all sessions.
+	 * Note: isAlive reports isAttachable (alive AND not terminating) to prevent
+	 * race conditions where killByWorkspaceId sees a session as alive while
+	 * it's actually in the process of being killed.
 	 */
 	listSessions(): ListSessionsResponse {
 		const sessions = Array.from(this.sessions.values()).map((session) => ({
 			sessionId: session.sessionId,
 			workspaceId: session.workspaceId,
 			paneId: session.paneId,
-			isAlive: session.isAlive,
+			isAlive: session.isAttachable, // Use isAttachable to prevent kill/attach races
 			attachedClients: session.clientCount,
 		}));
 
@@ -184,10 +234,11 @@ export class TerminalHost {
 	}
 
 	/**
-	 * Clear scrollback for a session
+	 * Clear scrollback for a session.
+	 * Throws if session is not found or is terminating.
 	 */
 	clearScrollback(request: ClearScrollbackRequest): EmptyResponse {
-		const session = this.getSession(request.sessionId);
+		const session = this.getActiveSession(request.sessionId);
 		session.clearScrollback();
 		return { success: true };
 	}
@@ -211,6 +262,13 @@ export class TerminalHost {
 	 * Clean up all sessions on shutdown
 	 */
 	dispose(): void {
+		// Clear all kill timers
+		for (const timer of this.killTimers.values()) {
+			clearTimeout(timer);
+		}
+		this.killTimers.clear();
+
+		// Dispose all sessions
 		for (const session of this.sessions.values()) {
 			session.dispose();
 		}
@@ -233,6 +291,22 @@ export class TerminalHost {
 	}
 
 	/**
+	 * Get an active (attachable) session by ID.
+	 * Throws if session doesn't exist or is terminating.
+	 * Use this for mutating operations (write, resize, clearScrollback).
+	 */
+	private getActiveSession(sessionId: string): Session {
+		const session = this.sessions.get(sessionId);
+		if (!session) {
+			throw new Error(`Session not found: ${sessionId}`);
+		}
+		if (!session.isAttachable) {
+			throw new Error(`Session not attachable: ${sessionId}`);
+		}
+		return session;
+	}
+
+	/**
 	 * Handle session exit
 	 */
 	private handleSessionExit(
@@ -240,9 +314,23 @@ export class TerminalHost {
 		_exitCode: number,
 		_signal?: number,
 	): void {
+		// Clear the kill timer since session exited normally
+		this.clearKillTimer(sessionId);
+
 		// Keep session around for a bit so clients can see exit status
 		// Then clean up (reschedule if clients still attached)
 		this.scheduleSessionCleanup(sessionId);
+	}
+
+	/**
+	 * Clear the kill timeout for a session
+	 */
+	private clearKillTimer(sessionId: string): void {
+		const timer = this.killTimers.get(sessionId);
+		if (timer) {
+			clearTimeout(timer);
+			this.killTimers.delete(sessionId);
+		}
 	}
 
 	/**

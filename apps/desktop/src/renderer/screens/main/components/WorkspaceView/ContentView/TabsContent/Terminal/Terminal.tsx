@@ -331,8 +331,10 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 				}
 			}
 		}
-	}, []);
+		// biome-ignore lint/correctness/useExhaustiveDependencies: refs used intentionally to avoid recreating callback
+	}, [paneId, setConnectionError]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refs (resizeRef, updateCwdRef, rendererRef) used intentionally to read latest values without recreating callback
 	const maybeApplyInitialState = useCallback(() => {
 		if (!didFirstRenderRef.current) return;
 		const result = pendingInitialStateRef.current;
@@ -518,6 +520,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		}
 	}, [flushPendingEvents, paneId]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: createOrAttachRef used intentionally to read latest value without recreating callback
 	const handleRetryConnection = useCallback(() => {
 		setConnectionError(null);
 		const xterm = xtermRef.current;
@@ -550,7 +553,13 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 				},
 			},
 		);
-	}, [paneId, workspaceId, maybeApplyInitialState, flushPendingEvents]);
+	}, [
+		paneId,
+		workspaceId,
+		maybeApplyInitialState,
+		flushPendingEvents,
+		setConnectionError,
+	]);
 
 	const handleStreamData = (event: TerminalStreamEvent) => {
 		// Queue events until terminal is ready to prevent data loss
@@ -629,6 +638,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		[isFocused],
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refs (writeRef, resizeRef, detachRef, clearScrollbackRef, createOrAttachRef) used intentionally to read latest values without resubscribing
 	useEffect(() => {
 		const container = terminalRef.current;
 		if (!container) return;
@@ -901,7 +911,13 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			searchAddonRef.current = null;
 			rendererRef.current = null;
 		};
-	}, [paneId, workspaceId, flushPendingEvents, maybeApplyInitialState]);
+	}, [
+		paneId,
+		workspaceId,
+		flushPendingEvents,
+		maybeApplyInitialState,
+		setConnectionError,
+	]);
 
 	useEffect(() => {
 		const xterm = xtermRef.current;
