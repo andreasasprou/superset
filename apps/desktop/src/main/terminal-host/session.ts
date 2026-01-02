@@ -91,6 +91,7 @@ export class Session {
 	private lastAttachedAt: Date;
 	private exitCode: number | null = null;
 	private disposed = false;
+	private terminatingAt: number | null = null;
 	private subprocessDecoder: PtySubprocessFrameDecoder | null = null;
 	private subprocessStdinQueue: Buffer[] = [];
 	private subprocessStdinQueuedBytes = 0;
@@ -294,6 +295,9 @@ export class Session {
 			case PtySubprocessIpcType.Exit: {
 				const exitCode = payload.length >= 4 ? payload.readInt32LE(0) : 0;
 				const signal = payload.length >= 8 ? payload.readInt32LE(4) : 0;
+				console.log(
+					`[Session ${this.sessionId}] Received EXIT frame: exitCode=${exitCode}, signal=${signal}`,
+				);
 				this.exitCode = exitCode;
 
 				this.broadcastEvent("exit", {
@@ -483,8 +487,18 @@ export class Session {
 	}
 
 	private sendKillToSubprocess(signal?: string): boolean {
+		console.log(
+			`[Session ${this.sessionId}] sendKillToSubprocess(${signal}): subprocess.stdin=${!!this.subprocess?.stdin}, disposed=${this.disposed}`,
+		);
 		const payload = signal ? Buffer.from(signal, "utf8") : undefined;
-		return this.sendFrameToSubprocess(PtySubprocessIpcType.Kill, payload);
+		const result = this.sendFrameToSubprocess(
+			PtySubprocessIpcType.Kill,
+			payload,
+		);
+		console.log(
+			`[Session ${this.sessionId}] sendKillToSubprocess(): sendFrameToSubprocess returned ${result}`,
+		);
+		return result;
 	}
 
 	private sendDisposeToSubprocess(): boolean {
@@ -665,6 +679,24 @@ export class Session {
 	}
 
 	/**
+	 * Check if session is in the process of terminating.
+	 * A terminating session has received a kill signal but hasn't exited yet.
+	 */
+	get isTerminating(): boolean {
+		return this.terminatingAt !== null;
+	}
+
+	/**
+	 * Check if session can be attached to.
+	 * A session is attachable if it's alive and not terminating.
+	 * This prevents race conditions where createOrAttach is called
+	 * immediately after kill but before the PTY has actually exited.
+	 */
+	get isAttachable(): boolean {
+		return this.isAlive && !this.isTerminating;
+	}
+
+	/**
 	 * Wait for PTY to be ready to accept writes.
 	 * Returns immediately if already ready, or waits for Spawned event.
 	 */
@@ -791,20 +823,45 @@ export class Session {
 	}
 
 	/**
-	 * Kill the PTY process
+	 * Kill the PTY process.
+	 * Marks the session as terminating immediately (idempotent).
+	 * The actual PTY termination is async - use isTerminating to check state.
 	 */
 	kill(signal: string = "SIGTERM"): void {
+		console.log(
+			`[Session ${this.sessionId}] kill(): terminatingAt=${this.terminatingAt}, subprocess=${!!this.subprocess}, subprocessReady=${this.subprocessReady}, ptyPid=${this.ptyPid}`,
+		);
+
+		// Idempotent: if already terminating, don't send another signal
+		if (this.terminatingAt !== null) {
+			console.log(
+				`[Session ${this.sessionId}] kill(): already terminating, skipping`,
+			);
+			return;
+		}
+
+		// Mark as terminating immediately to prevent race conditions
+		this.terminatingAt = Date.now();
+
 		if (this.subprocess && this.subprocessReady) {
-			this.sendKillToSubprocess(signal);
+			const sent = this.sendKillToSubprocess(signal);
+			console.log(
+				`[Session ${this.sessionId}] kill(): sendKillToSubprocess(${signal}) returned ${sent}`,
+			);
 			return;
 		}
 
 		// If the subprocess isn't ready yet, fall back to killing the subprocess itself
-		// so session termination is reliable ( differentiation isn't meaningful pre-spawn).
+		// so session termination is reliable (differentiation isn't meaningful pre-spawn).
+		console.log(
+			`[Session ${this.sessionId}] kill(): subprocess not ready, using direct kill`,
+		);
 		try {
 			this.subprocess?.kill(signal as NodeJS.Signals);
-		} catch {
-			// Ignore
+		} catch (error) {
+			console.log(
+				`[Session ${this.sessionId}] kill(): direct kill failed: ${error}`,
+			);
 		}
 	}
 
@@ -816,11 +873,18 @@ export class Session {
 		this.disposed = true;
 
 		if (this.subprocess) {
+			// Capture reference before nullifying - the timeout needs it
+			const subprocess = this.subprocess;
 			this.sendDisposeToSubprocess();
-			// Force kill after timeout
-			setTimeout(() => {
-				this.subprocess?.kill("SIGKILL");
+			// Force kill after timeout if dispose frame didn't terminate it
+			const killTimer = setTimeout(() => {
+				try {
+					subprocess.kill("SIGKILL");
+				} catch {
+					// Process may already be dead
+				}
 			}, 1000);
+			killTimer.unref(); // Don't keep daemon alive for this timer
 			this.subprocess = null;
 		}
 		this.subprocessReady = false;
