@@ -270,21 +270,6 @@ export class TerminalHost {
 		this.sessions.clear();
 	}
 
-	// ===========================================================================
-	// Private Methods
-	// ===========================================================================
-
-	/**
-	 * Get a session by ID, throw if not found
-	 */
-	private getSession(sessionId: string): Session {
-		const session = this.sessions.get(sessionId);
-		if (!session) {
-			throw new Error(`Session not found: ${sessionId}`);
-		}
-		return session;
-	}
-
 	/**
 	 * Get an active (attachable) session by ID.
 	 * Throws if session doesn't exist or is terminating.
