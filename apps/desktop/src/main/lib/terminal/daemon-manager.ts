@@ -326,12 +326,18 @@ export class DaemonTerminalManager extends EventEmitter {
 	}): Promise<void> {
 		const { paneId, deleteHistory = false } = params;
 
-		await this.client.kill({ sessionId: paneId, deleteHistory });
-
+		// Emit exit event BEFORE killing so tRPC subscriptions complete cleanly.
+		// This prevents WRITE_FAILED errors when the daemon kills the session
+		// but React components are still mounted with active subscriptions.
+		// The daemon will also emit an exit event, but duplicate events are
+		// harmless since emit.complete() has already been called.
 		const session = this.sessions.get(paneId);
-		if (session) {
+		if (session?.isAlive) {
 			session.isAlive = false;
+			this.emit(`exit:${paneId}`, 0, "SIGTERM");
 		}
+
+		await this.client.kill({ sessionId: paneId, deleteHistory });
 	}
 
 	detach(params: { paneId: string }): void {
@@ -412,21 +418,38 @@ export class DaemonTerminalManager extends EventEmitter {
 			return { killed: 0, failed: 0 };
 		}
 
+		console.log(
+			`[DaemonTerminalManager] Killing ${paneIdsToKill.size} sessions for workspace ${workspaceId}`,
+		);
+
 		let killed = 0;
 		let failed = 0;
 
 		for (const paneId of paneIdsToKill) {
 			try {
-				await this.client.kill({ sessionId: paneId, deleteHistory: true });
-				// Clean up local state if it exists
+				// Emit exit event BEFORE killing so tRPC subscriptions complete cleanly.
+				// This prevents WRITE_FAILED error toast floods when deleting workspaces.
 				const session = this.sessions.get(paneId);
-				if (session) {
+				if (session?.isAlive) {
 					session.isAlive = false;
+					this.emit(`exit:${paneId}`, 0, "SIGTERM");
 				}
+
+				await this.client.kill({ sessionId: paneId, deleteHistory: true });
 				killed++;
-			} catch {
+			} catch (error) {
+				console.error(
+					`[DaemonTerminalManager] Failed to kill session ${paneId}:`,
+					error,
+				);
 				failed++;
 			}
+		}
+
+		if (failed > 0) {
+			console.warn(
+				`[DaemonTerminalManager] killByWorkspaceId: killed=${killed}, failed=${failed}`,
+			);
 		}
 
 		return { killed, failed };
