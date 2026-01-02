@@ -83,7 +83,6 @@ export class Session {
 
 	private subprocess: ChildProcess | null = null;
 	private subprocessReady = false;
-	private ptyPid: number | null = null;
 	private emulator: HeadlessEmulator;
 	private attachedClients: Map<Socket, AttachedClient> = new Map();
 	private clientSocketsWaitingForDrain: Set<Socket> = new Set();
@@ -585,27 +584,6 @@ export class Session {
 		const waiters = this.emulatorFlushWaiters;
 		this.emulatorFlushWaiters = [];
 		for (const resolve of waiters) resolve();
-	}
-
-	private async flushEmulatorWrites(timeoutMs?: number): Promise<void> {
-		if (this.emulatorWriteQueue.length === 0 && !this.emulatorWriteScheduled) {
-			return;
-		}
-
-		const flushPromise = new Promise<void>((resolve) => {
-			this.emulatorFlushWaiters.push(resolve);
-			this.scheduleEmulatorWrite();
-		});
-
-		if (timeoutMs !== undefined) {
-			// Race against timeout to prevent indefinite hang with continuous output
-			await Promise.race([
-				flushPromise,
-				new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
-			]);
-		} else {
-			await flushPromise;
-		}
 	}
 
 	/**
