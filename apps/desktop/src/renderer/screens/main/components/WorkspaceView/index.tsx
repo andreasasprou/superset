@@ -52,7 +52,7 @@ export function WorkspaceView() {
 		: "workbench";
 
 	// Tab management shortcuts
-	useHotkeys(getHotkey("NEW_TERMINAL"), () => {
+	useHotkeys(getHotkey("NEW_GROUP"), () => {
 		if (activeWorkspaceId) {
 			// If in Review mode, switch to Workbench first
 			if (viewMode === "review") {

@@ -3,11 +3,11 @@ import { HiMiniCommandLine } from "react-icons/hi2";
 import { useHotkeyDisplay } from "renderer/stores/hotkeys";
 
 export function EmptyTabView() {
-	const newTerminalDisplay = useHotkeyDisplay("NEW_TERMINAL");
+	const newGroupDisplay = useHotkeyDisplay("NEW_GROUP");
 	const openInAppDisplay = useHotkeyDisplay("OPEN_IN_APP");
 
 	const shortcuts = [
-		{ label: "New Terminal", display: newTerminalDisplay },
+		{ label: "New Group", display: newGroupDisplay },
 		{ label: "Open in App", display: openInAppDisplay },
 	];
 

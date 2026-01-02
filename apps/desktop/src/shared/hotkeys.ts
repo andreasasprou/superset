@@ -457,9 +457,9 @@ export const HOTKEYS = {
 		category: "Terminal",
 		description: "Search text in the active terminal",
 	}),
-	NEW_TERMINAL: defineHotkey({
+	NEW_GROUP: defineHotkey({
 		keys: "meta+t",
-		label: "New Terminal",
+		label: "New Group",
 		category: "Terminal",
 	}),
 	CLOSE_TERMINAL: defineHotkey({
