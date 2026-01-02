@@ -1,6 +1,14 @@
-import { settings, type TerminalPreset } from "@superset/local-db";
+import {
+	settings,
+	TERMINAL_LINK_BEHAVIORS,
+	type TerminalPreset,
+} from "@superset/local-db";
 import { localDb } from "main/lib/local-db";
-import { DEFAULT_CONFIRM_ON_QUIT } from "shared/constants";
+import {
+	DEFAULT_CONFIRM_ON_QUIT,
+	DEFAULT_NAVIGATION_STYLE,
+	DEFAULT_TERMINAL_LINK_BEHAVIOR,
+} from "shared/constants";
 import { DEFAULT_RINGTONE_ID, RINGTONES } from "shared/ringtones";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
@@ -175,6 +183,67 @@ export const createSettingsRouter = () => {
 					.onConflictDoUpdate({
 						target: settings.id,
 						set: { confirmOnQuit: input.enabled },
+					})
+					.run();
+
+				return { success: true };
+			}),
+
+		getTerminalLinkBehavior: publicProcedure.query(() => {
+			const row = getSettings();
+			return row.terminalLinkBehavior ?? DEFAULT_TERMINAL_LINK_BEHAVIOR;
+		}),
+
+		setTerminalLinkBehavior: publicProcedure
+			.input(z.object({ behavior: z.enum(TERMINAL_LINK_BEHAVIORS) }))
+			.mutation(({ input }) => {
+				localDb
+					.insert(settings)
+					.values({ id: 1, terminalLinkBehavior: input.behavior })
+					.onConflictDoUpdate({
+						target: settings.id,
+						set: { terminalLinkBehavior: input.behavior },
+					})
+					.run();
+
+				return { success: true };
+			}),
+
+		getNavigationStyle: publicProcedure.query(() => {
+			const row = getSettings();
+			return row.navigationStyle ?? DEFAULT_NAVIGATION_STYLE;
+		}),
+
+		setNavigationStyle: publicProcedure
+			.input(z.object({ style: z.enum(["top-bar", "sidebar"]) }))
+			.mutation(({ input }) => {
+				localDb
+					.insert(settings)
+					.values({ id: 1, navigationStyle: input.style })
+					.onConflictDoUpdate({
+						target: settings.id,
+						set: { navigationStyle: input.style },
+					})
+					.run();
+
+				return { success: true };
+			}),
+
+		getTerminalPersistence: publicProcedure.query(() => {
+			const row = getSettings();
+			// Default to false (terminal persistence disabled by default)
+			return row.terminalPersistence ?? false;
+		}),
+
+		setTerminalPersistence: publicProcedure
+			.input(z.object({ enabled: z.boolean() }))
+			.mutation(({ input }) => {
+				localDb
+					.insert(settings)
+					.values({ id: 1, terminalPersistence: input.enabled })
+					.onConflictDoUpdate({
+						target: settings.id,
+						set: { terminalPersistence: input.enabled },
 					})
 					.run();
 

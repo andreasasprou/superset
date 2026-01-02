@@ -1,10 +1,12 @@
+import { toast } from "@superset/ui/sonner";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { SearchAddon } from "@xterm/addon-search";
-import type { Terminal as XTerm } from "@xterm/xterm";
+import type { IDisposable, Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import debounce from "lodash/debounce";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { trpc } from "renderer/lib/trpc";
+import { trpcClient } from "renderer/lib/trpc-client";
 import { useAppHotkey } from "renderer/stores/hotkeys";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import { useTerminalCallbacksStore } from "renderer/stores/tabs/terminal-callbacks";
@@ -18,11 +20,48 @@ import {
 	setupKeyboardHandler,
 	setupPasteHandler,
 	setupResizeHandlers,
+	type TerminalRendererRef,
 } from "./helpers";
+import { useTerminalConnection } from "./hooks";
 import { parseCwd } from "./parseCwd";
 import { TerminalSearch } from "./TerminalSearch";
 import type { TerminalProps, TerminalStreamEvent } from "./types";
 import { shellEscapePaths } from "./utils";
+
+const FIRST_RENDER_RESTORE_FALLBACK_MS = 250;
+
+// Module-level map to track pending detach timeouts.
+// This survives React StrictMode's unmount/remount cycle, allowing us to
+// cancel a pending detach if the component immediately remounts.
+const pendingDetaches = new Map<string, NodeJS.Timeout>();
+
+type CreateOrAttachResult = {
+	wasRecovered: boolean;
+	isNew: boolean;
+	scrollback: string;
+	snapshot?: {
+		snapshotAnsi: string;
+		rehydrateSequences: string;
+		cwd: string | null;
+		modes: Record<string, boolean>;
+		cols: number;
+		rows: number;
+		scrollbackLines: number;
+		debug?: {
+			xtermBufferType: string;
+			hasAltScreenEntry: boolean;
+			altBuffer?: {
+				lines: number;
+				nonEmptyLines: number;
+				totalChars: number;
+				cursorX: number;
+				cursorY: number;
+				sampleLines: string[];
+			};
+			normalBufferLines: number;
+		};
+	};
+};
 
 export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	const paneId = tabId;
@@ -36,10 +75,10 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	const xtermRef = useRef<XTerm | null>(null);
 	const fitAddonRef = useRef<FitAddon | null>(null);
 	const searchAddonRef = useRef<SearchAddon | null>(null);
+	const rendererRef = useRef<TerminalRendererRef | null>(null);
 	const isExitedRef = useRef(false);
 	const pendingEventsRef = useRef<TerminalStreamEvent[]>([]);
 	const commandBufferRef = useRef("");
-	const [subscriptionEnabled, setSubscriptionEnabled] = useState(false);
 	const [isSearchOpen, setIsSearchOpen] = useState(false);
 	const [terminalCwd, setTerminalCwd] = useState<string | null>(null);
 	const [cwdConfirmed, setCwdConfirmed] = useState(false);
@@ -47,12 +86,44 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	const setTabAutoTitle = useTabsStore((s) => s.setTabAutoTitle);
 	const updatePaneCwd = useTabsStore((s) => s.updatePaneCwd);
 	const focusedPaneIds = useTabsStore((s) => s.focusedPaneIds);
+	const addFileViewerPane = useTabsStore((s) => s.addFileViewerPane);
 	const terminalTheme = useTerminalTheme();
+
+	// Terminal connection state and mutations (extracted to hook for cleaner code)
+	const {
+		connectionError,
+		setConnectionError,
+		workspaceCwd,
+		refs: {
+			createOrAttach: createOrAttachRef,
+			write: writeRef,
+			resize: resizeRef,
+			detach: detachRef,
+			clearScrollback: clearScrollbackRef,
+		},
+	} = useTerminalConnection({ workspaceId });
 
 	// Ref for initial theme to avoid recreating terminal on theme change
 	const initialThemeRef = useRef(terminalTheme);
 
 	const isFocused = pane?.tabId ? focusedPaneIds[pane.tabId] === paneId : false;
+
+	// Gate streaming until initial state restoration is applied to avoid interleaving output.
+	const isStreamReadyRef = useRef(false);
+
+	// Gate restoration until xterm has rendered at least once (renderer/viewport ready).
+	const didFirstRenderRef = useRef(false);
+	const pendingInitialStateRef = useRef<CreateOrAttachResult | null>(null);
+	const renderDisposableRef = useRef<IDisposable | null>(null);
+	const restoreSequenceRef = useRef(0);
+
+	// Track alternate screen mode ourselves (xterm.buffer.active.type is unreliable after HMR/recovery)
+	// Updated from: snapshot.modes.alternateScreen on restore, escape sequences in stream
+	const isAlternateScreenRef = useRef(false);
+	// Track bracketed paste mode so large pastes can preserve a single bracketed-paste envelope.
+	const isBracketedPasteRef = useRef(false);
+	// Track mode toggles across chunk boundaries (escape sequences can span stream frames).
+	const modeScanBufferRef = useRef("");
 
 	// Refs avoid effect re-runs when these values change
 	const isFocusedRef = useRef(isFocused);
@@ -65,8 +136,64 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	paneInitialCwdRef.current = paneInitialCwd;
 	clearPaneInitialDataRef.current = clearPaneInitialData;
 
-	const { data: workspaceCwd } =
-		trpc.terminal.getWorkspaceCwd.useQuery(workspaceId);
+	// Use ref for workspaceCwd to avoid terminal recreation when query loads
+	// (changing from undefined→string triggers useEffect, causing xterm errors)
+	const workspaceCwdRef = useRef(workspaceCwd);
+	workspaceCwdRef.current = workspaceCwd;
+
+	// Query terminal link behavior setting
+	const { data: terminalLinkBehavior } =
+		trpc.settings.getTerminalLinkBehavior.useQuery();
+
+	// Handler for file link clicks - uses current setting value
+	const handleFileLinkClick = useCallback(
+		(path: string, line?: number, column?: number) => {
+			const behavior = terminalLinkBehavior ?? "external-editor";
+
+			if (behavior === "file-viewer") {
+				// Normalize absolute paths to worktree-relative paths for file viewer
+				// File viewer expects relative paths, but terminal links can be absolute
+				let filePath = path;
+				if (workspaceCwd) {
+					// Use path boundary check to avoid incorrect prefix stripping
+					// e.g., /repo vs /repo-other should not match
+					if (path === workspaceCwd) {
+						filePath = ".";
+					} else if (path.startsWith(`${workspaceCwd}/`)) {
+						filePath = path.slice(workspaceCwd.length + 1);
+					} else if (path.startsWith("/")) {
+						// Absolute path outside workspace - still try to open it
+						// but warn in console as it may fail validation
+						console.warn(
+							"[Terminal] Opening absolute path outside workspace:",
+							path,
+						);
+					}
+				}
+				addFileViewerPane(workspaceId, { filePath });
+			} else {
+				trpcClient.external.openFileInEditor
+					.mutate({
+						path,
+						line,
+						column,
+						cwd: workspaceCwd ?? undefined,
+					})
+					.catch((error) => {
+						console.error(
+							"[Terminal] Failed to open file in editor:",
+							path,
+							error,
+						);
+					});
+			}
+		},
+		[terminalLinkBehavior, workspaceId, workspaceCwd, addFileViewerPane],
+	);
+
+	// Ref to avoid terminal recreation when callback changes
+	const handleFileLinkClickRef = useRef(handleFileLinkClick);
+	handleFileLinkClickRef.current = handleFileLinkClick;
 
 	// Seed cwd from initialCwd or workspace path (shell spawns there)
 	// OSC-7 will override if/when the shell reports directory changes
@@ -97,23 +224,6 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 	const updateCwdRef = useRef(updateCwdFromData);
 	updateCwdRef.current = updateCwdFromData;
 
-	const createOrAttachMutation = trpc.terminal.createOrAttach.useMutation();
-	const writeMutation = trpc.terminal.write.useMutation();
-	const resizeMutation = trpc.terminal.resize.useMutation();
-	const detachMutation = trpc.terminal.detach.useMutation();
-	const clearScrollbackMutation = trpc.terminal.clearScrollback.useMutation();
-
-	const createOrAttachRef = useRef(createOrAttachMutation.mutate);
-	const writeRef = useRef(writeMutation.mutate);
-	const resizeRef = useRef(resizeMutation.mutate);
-	const detachRef = useRef(detachMutation.mutate);
-	const clearScrollbackRef = useRef(clearScrollbackMutation.mutate);
-	createOrAttachRef.current = createOrAttachMutation.mutate;
-	writeRef.current = writeMutation.mutate;
-	resizeRef.current = resizeMutation.mutate;
-	detachRef.current = detachMutation.mutate;
-	clearScrollbackRef.current = clearScrollbackMutation.mutate;
-
 	const registerClearCallbackRef = useRef(
 		useTerminalCallbacksStore.getState().registerClearCallback,
 	);
@@ -133,23 +243,363 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		}, 100),
 	);
 
+	const updateModesFromData = useCallback((data: string) => {
+		// Escape sequences can be split across streamed frames, so scan using a small carry buffer.
+		const combined = modeScanBufferRef.current + data;
+
+		const enterAltIndex = Math.max(
+			combined.lastIndexOf("\x1b[?1049h"),
+			combined.lastIndexOf("\x1b[?47h"),
+		);
+		const exitAltIndex = Math.max(
+			combined.lastIndexOf("\x1b[?1049l"),
+			combined.lastIndexOf("\x1b[?47l"),
+		);
+		if (enterAltIndex !== -1 || exitAltIndex !== -1) {
+			isAlternateScreenRef.current = enterAltIndex > exitAltIndex;
+		}
+
+		const enableBracketedIndex = combined.lastIndexOf("\x1b[?2004h");
+		const disableBracketedIndex = combined.lastIndexOf("\x1b[?2004l");
+		if (enableBracketedIndex !== -1 || disableBracketedIndex !== -1) {
+			isBracketedPasteRef.current =
+				enableBracketedIndex > disableBracketedIndex;
+		}
+
+		// Keep a small tail in case the next chunk starts mid-sequence.
+		modeScanBufferRef.current = combined.slice(-32);
+	}, []);
+
+	const updateModesFromDataRef = useRef(updateModesFromData);
+	updateModesFromDataRef.current = updateModesFromData;
+
+	const flushPendingEvents = useCallback(() => {
+		const xterm = xtermRef.current;
+		if (!xterm) return;
+		if (pendingEventsRef.current.length === 0) return;
+
+		const events = pendingEventsRef.current.splice(
+			0,
+			pendingEventsRef.current.length,
+		);
+
+		for (const event of events) {
+			if (event.type === "data") {
+				updateModesFromDataRef.current(event.data);
+				xterm.write(event.data);
+				updateCwdRef.current(event.data);
+			} else if (event.type === "exit") {
+				isExitedRef.current = true;
+				isStreamReadyRef.current = false;
+				xterm.writeln(`\r\n\r\n[Process exited with code ${event.exitCode}]`);
+				xterm.writeln("[Press any key to restart]");
+			} else if (event.type === "disconnect") {
+				setConnectionError(
+					event.reason || "Connection to terminal daemon lost",
+				);
+			} else if (event.type === "error") {
+				const message = event.code
+					? `${event.code}: ${event.error}`
+					: event.error;
+				console.warn("[Terminal] stream error:", message);
+
+				toast.error("Terminal error", {
+					description: message,
+				});
+
+				// Don't block interaction for non-fatal issues like a paste drop or a
+				// transient write failure (we keep the session alive).
+				if (
+					event.code === "WRITE_QUEUE_FULL" ||
+					event.code === "WRITE_FAILED"
+				) {
+					xterm.writeln(`\r\n[Terminal] ${message}`);
+				} else {
+					setConnectionError(message);
+				}
+			}
+		}
+		// biome-ignore lint/correctness/useExhaustiveDependencies: refs used intentionally to avoid recreating callback
+	}, [setConnectionError]);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refs (resizeRef, updateCwdRef, rendererRef) used intentionally to read latest values without recreating callback
+	const maybeApplyInitialState = useCallback(() => {
+		if (!didFirstRenderRef.current) return;
+		const result = pendingInitialStateRef.current;
+		if (!result) return;
+
+		const xterm = xtermRef.current;
+		const fitAddon = fitAddonRef.current;
+		if (!xterm || !fitAddon) return;
+
+		// Clear before applying to prevent double-apply on concurrent triggers.
+		pendingInitialStateRef.current = null;
+		const restoreSequence = ++restoreSequenceRef.current;
+
+		try {
+			// Canonical initial content: prefer snapshot (daemon mode) over scrollback (non-daemon)
+			// In daemon mode, scrollback is empty to avoid duplicating the payload over IPC.
+			const initialAnsi = result.snapshot?.snapshotAnsi ?? result.scrollback;
+
+			// Track alternate screen mode from snapshot for our own reference
+			// (xterm.buffer.active.type is unreliable after HMR/recovery)
+			isAlternateScreenRef.current = !!result.snapshot?.modes.alternateScreen;
+			isBracketedPasteRef.current = !!result.snapshot?.modes.bracketedPaste;
+			modeScanBufferRef.current = "";
+
+			// Fallback: parse initialAnsi for escape sequences when snapshot.modes is unavailable.
+			// This handles non-daemon mode and edge cases where daemon didn't track the mode.
+			if (initialAnsi && result.snapshot?.modes === undefined) {
+				// Use lastIndexOf to find the final state - handles multiple enter/exit cycles
+				// (e.g., user opened vim, closed it, opened it again)
+				const enterAltIndex = Math.max(
+					initialAnsi.lastIndexOf("\x1b[?1049h"),
+					initialAnsi.lastIndexOf("\x1b[?47h"),
+				);
+				const exitAltIndex = Math.max(
+					initialAnsi.lastIndexOf("\x1b[?1049l"),
+					initialAnsi.lastIndexOf("\x1b[?47l"),
+				);
+				if (enterAltIndex !== -1 || exitAltIndex !== -1) {
+					isAlternateScreenRef.current = enterAltIndex > exitAltIndex;
+				}
+
+				// Bracketed paste mode can toggle during a session - use the last seen state.
+				const bracketEnableIndex = initialAnsi.lastIndexOf("\x1b[?2004h");
+				const bracketDisableIndex = initialAnsi.lastIndexOf("\x1b[?2004l");
+				if (bracketEnableIndex !== -1 || bracketDisableIndex !== -1) {
+					isBracketedPasteRef.current =
+						bracketEnableIndex > bracketDisableIndex;
+				}
+			}
+
+			// Apply rehydration sequences to restore other terminal modes
+			// (app cursor mode, bracketed paste, mouse tracking, etc.)
+			if (result.snapshot?.rehydrateSequences) {
+				xterm.write(result.snapshot.rehydrateSequences);
+			}
+
+			// Resize xterm to match snapshot dimensions before applying content.
+			// The snapshot's cursor positioning assumes specific cols/rows.
+			const snapshotCols = result.snapshot?.cols;
+			const snapshotRows = result.snapshot?.rows;
+			if (
+				snapshotCols &&
+				snapshotRows &&
+				(xterm.cols !== snapshotCols || xterm.rows !== snapshotRows)
+			) {
+				xterm.resize(snapshotCols, snapshotRows);
+			}
+
+			const isAltScreenReattach =
+				!result.isNew && result.snapshot?.modes.alternateScreen;
+
+			// For alt-screen (TUI) sessions, the serialized snapshot often renders
+			// incorrectly because styled spaces and positioning get lost. Instead of
+			// writing broken snapshot, enter alt-screen and trigger SIGWINCH so the
+			// TUI redraws itself via the live stream.
+			// NOTE: This is primarily a fallback path for app restart recovery.
+			// During normal workspace/tab switching with persistence enabled,
+			// terminals stay mounted and this code path is not triggered.
+			if (isAltScreenReattach) {
+				// Enter alt-screen mode and WAIT for xterm to process it before proceeding.
+				// xterm.write() is async - if we trigger SIGWINCH before alt-screen is entered,
+				// the TUI receives SIGWINCH in normal mode, ignores it, then xterm switches
+				// buffers and we get a white screen.
+				xterm.write("\x1b[?1049h", () => {
+					// Apply rehydration sequences for other modes (bracketed paste, etc.)
+					if (result.snapshot?.rehydrateSequences) {
+						// Filter out alt-screen sequences since we already entered
+						const ESC = "\x1b";
+						const filteredRehydrate = result.snapshot.rehydrateSequences
+							.split(ESC + "[?1049h")
+							.join("")
+							.split(ESC + "[?47h")
+							.join("");
+						if (filteredRehydrate) {
+							xterm.write(filteredRehydrate);
+						}
+					}
+
+					// NOW safe to enable streaming and flush pending events
+					isStreamReadyRef.current = true;
+					flushPendingEvents();
+
+					// Fit xterm to container and trigger SIGWINCH
+					requestAnimationFrame(() => {
+						if (xtermRef.current !== xterm) return;
+
+						fitAddon.fit();
+						const cols = xterm.cols;
+						const rows = xterm.rows;
+
+						if (cols > 0 && rows > 0) {
+							// Resize down then up to guarantee SIGWINCH
+							resizeRef.current({ paneId, cols, rows: rows - 1 });
+							setTimeout(() => {
+								if (xtermRef.current !== xterm) return;
+								resizeRef.current({ paneId, cols, rows });
+								// Force xterm to repaint after SIGWINCH completes
+								xterm.refresh(0, rows - 1);
+							}, 100);
+						}
+					});
+				});
+
+				// Use snapshot.cwd if available, otherwise parse from content
+				if (result.snapshot?.cwd) {
+					updateCwdRef.current(result.snapshot.cwd);
+				} else {
+					updateCwdRef.current(initialAnsi);
+				}
+				return; // Skip normal snapshot flow
+			}
+
+			// xterm.write() is asynchronous - escape sequences may not be fully
+			// processed when the terminal first renders, causing garbled display.
+			// Force a re-render after write completes to ensure correct display.
+			// (Symptom: restored terminals show corrupted text until resized)
+			// Use fitAddon.fit() and (when using WebGL) clear the glyph atlas to force a full repaint.
+			xterm.write(initialAnsi, () => {
+				const redraw = () => {
+					requestAnimationFrame(() => {
+						try {
+							if (restoreSequenceRef.current !== restoreSequence) return;
+							if (xtermRef.current !== xterm) return;
+
+							fitAddon.fit();
+							if (xtermRef.current !== xterm) return;
+
+							// Reattached sessions can sometimes render partially until the user resizes the pane.
+							// WebGL off fully fixes this, which strongly suggests a WebGL texture-atlas repaint bug.
+							// Clearing the atlas forces xterm-webgl to rebuild glyphs and repaint without a resize nudge.
+							const cols = xterm.cols;
+							const rows = xterm.rows;
+							if (cols <= 0 || rows <= 0) return;
+
+							// Keep PTY dimensions in sync even when FitAddon doesn't change cols/rows.
+							resizeRef.current({ paneId, cols, rows });
+
+							if (!result.isNew) {
+								const renderer = rendererRef.current?.current;
+								if (renderer?.kind === "webgl") {
+									// Clear twice: once immediately, and once after fonts settle.
+									// This reduces restore artifacts (especially for TUIs like opencode)
+									// and prevents stale glyphs when fonts swap in.
+									renderer.clearTextureAtlas?.();
+								}
+							}
+							xterm.refresh(0, rows - 1);
+						} catch (error) {
+							console.warn(
+								"[Terminal] redraw() failed after restoration:",
+								error,
+							);
+						}
+					});
+				};
+
+				// Redraw once immediately, and once again after fonts settle.
+				redraw();
+				void document.fonts?.ready.then(() => {
+					if (restoreSequenceRef.current !== restoreSequence) return;
+					if (xtermRef.current !== xterm) return;
+					redraw();
+				});
+
+				// Enable streaming AFTER xterm has processed the snapshot.
+				// This prevents live PTY output from interleaving with snapshot replay.
+				isStreamReadyRef.current = true;
+				flushPendingEvents();
+			});
+			// Use snapshot.cwd if available, otherwise parse from content
+			if (result.snapshot?.cwd) {
+				updateCwdRef.current(result.snapshot.cwd);
+			} else {
+				updateCwdRef.current(initialAnsi);
+			}
+		} catch (error) {
+			console.error("[Terminal] Restoration failed:", error);
+		}
+	}, [flushPendingEvents, paneId]);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: createOrAttachRef used intentionally to read latest value without recreating callback
+	const handleRetryConnection = useCallback(() => {
+		setConnectionError(null);
+		const xterm = xtermRef.current;
+		if (!xterm) return;
+
+		isStreamReadyRef.current = false;
+		pendingInitialStateRef.current = null;
+
+		xterm.clear();
+		xterm.writeln("Retrying connection...\r\n");
+
+		createOrAttachRef.current(
+			{
+				paneId,
+				tabId: parentTabIdRef.current || paneId,
+				workspaceId,
+				cols: xterm.cols,
+				rows: xterm.rows,
+			},
+			{
+				onSuccess: (result) => {
+					setConnectionError(null);
+					pendingInitialStateRef.current = result;
+					maybeApplyInitialState();
+				},
+				onError: (error) => {
+					setConnectionError(error.message || "Connection failed");
+					isStreamReadyRef.current = true;
+					flushPendingEvents();
+				},
+			},
+		);
+	}, [
+		paneId,
+		workspaceId,
+		maybeApplyInitialState,
+		flushPendingEvents,
+		setConnectionError,
+	]);
+
 	const handleStreamData = (event: TerminalStreamEvent) => {
 		// Queue events until terminal is ready to prevent data loss
-		if (!xtermRef.current || !subscriptionEnabled) {
+		if (!xtermRef.current || !isStreamReadyRef.current) {
 			pendingEventsRef.current.push(event);
 			return;
 		}
 
 		if (event.type === "data") {
+			updateModesFromDataRef.current(event.data);
 			xtermRef.current.write(event.data);
 			updateCwdFromData(event.data);
 		} else if (event.type === "exit") {
 			isExitedRef.current = true;
-			setSubscriptionEnabled(false);
+			isStreamReadyRef.current = false;
 			xtermRef.current.writeln(
 				`\r\n\r\n[Process exited with code ${event.exitCode}]`,
 			);
 			xtermRef.current.writeln("[Press any key to restart]");
+		} else if (event.type === "disconnect") {
+			// Daemon connection lost - show error UI with retry option
+			setConnectionError(event.reason || "Connection to terminal daemon lost");
+		} else if (event.type === "error") {
+			const message = event.code
+				? `${event.code}: ${event.error}`
+				: event.error;
+			console.warn("[Terminal] stream error:", message);
+
+			toast.error("Terminal error", {
+				description: message,
+			});
+
+			if (event.code === "WRITE_QUEUE_FULL" || event.code === "WRITE_FAILED") {
+				xtermRef.current.writeln(`\r\n[Terminal] ${message}`);
+			} else {
+				setConnectionError(message);
+			}
 		}
 	};
 
@@ -187,24 +637,40 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		[isFocused],
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: refs (writeRef, resizeRef, detachRef, clearScrollbackRef, createOrAttachRef) used intentionally to read latest values without resubscribing
 	useEffect(() => {
 		const container = terminalRef.current;
 		if (!container) return;
+
+		// Cancel any pending detach from a previous unmount (e.g., React StrictMode's
+		// simulated unmount/remount cycle). This prevents the detach from corrupting
+		// the terminal state when we're immediately remounting.
+		const pendingDetach = pendingDetaches.get(paneId);
+		if (pendingDetach) {
+			clearTimeout(pendingDetach);
+			pendingDetaches.delete(paneId);
+		}
 
 		let isUnmounted = false;
 
 		const {
 			xterm,
 			fitAddon,
+			renderer,
 			cleanup: cleanupQuerySuppression,
-		} = createTerminalInstance(
-			container,
-			workspaceCwd,
-			initialThemeRef.current,
-		);
+		} = createTerminalInstance(container, {
+			cwd: workspaceCwdRef.current,
+			initialTheme: initialThemeRef.current,
+			onFileLinkClick: (path, line, column) =>
+				handleFileLinkClickRef.current(path, line, column),
+		});
 		xtermRef.current = xterm;
 		fitAddonRef.current = fitAddon;
+		rendererRef.current = renderer;
 		isExitedRef.current = false;
+		isStreamReadyRef.current = false;
+		didFirstRenderRef.current = false;
+		pendingInitialStateRef.current = null;
 
 		if (isFocusedRef.current) {
 			xterm.focus();
@@ -217,37 +683,37 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			searchAddonRef.current = searchAddon;
 		});
 
-		const flushPendingEvents = () => {
-			if (pendingEventsRef.current.length === 0) return;
-			const events = pendingEventsRef.current.splice(
-				0,
-				pendingEventsRef.current.length,
-			);
-			for (const event of events) {
-				if (event.type === "data") {
-					xterm.write(event.data);
-					updateCwdRef.current(event.data);
-				} else {
-					isExitedRef.current = true;
-					setSubscriptionEnabled(false);
-					xterm.writeln(`\r\n\r\n[Process exited with code ${event.exitCode}]`);
-					xterm.writeln("[Press any key to restart]");
-				}
-			}
-		};
+		// Wait for xterm to render once before applying restoration data.
+		// This prevents crashes when writing rehydrate escape sequences too early.
+		renderDisposableRef.current?.dispose();
+		let firstRenderFallback: ReturnType<typeof setTimeout> | null = null;
 
-		const applyInitialState = (result: {
-			wasRecovered: boolean;
-			isNew: boolean;
-			scrollback: string;
-		}) => {
-			xterm.write(result.scrollback);
-			updateCwdRef.current(result.scrollback);
-		};
+		renderDisposableRef.current = xterm.onRender(() => {
+			if (firstRenderFallback) {
+				clearTimeout(firstRenderFallback);
+				firstRenderFallback = null;
+			}
+			renderDisposableRef.current?.dispose();
+			renderDisposableRef.current = null;
+			didFirstRenderRef.current = true;
+			maybeApplyInitialState();
+		});
+
+		// Failure-proofing: if the renderer never emits an initial render (e.g. WebGL hiccup,
+		// offscreen mount), don't leave the session stuck in "not ready" forever.
+		firstRenderFallback = setTimeout(() => {
+			if (isUnmounted) return;
+			if (didFirstRenderRef.current) return;
+			didFirstRenderRef.current = true;
+			maybeApplyInitialState();
+		}, FIRST_RENDER_RESTORE_FALLBACK_MS);
 
 		const restartTerminal = () => {
 			isExitedRef.current = false;
-			setSubscriptionEnabled(false);
+			isStreamReadyRef.current = false;
+			isAlternateScreenRef.current = false; // Reset for new shell
+			isBracketedPasteRef.current = false;
+			modeScanBufferRef.current = "";
 			xterm.clear();
 			createOrAttachRef.current(
 				{
@@ -259,12 +725,14 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 				},
 				{
 					onSuccess: (result) => {
-						applyInitialState(result);
-						setSubscriptionEnabled(true);
-						flushPendingEvents();
+						pendingInitialStateRef.current = result;
+						maybeApplyInitialState();
 					},
-					onError: () => {
-						setSubscriptionEnabled(true);
+					onError: (error) => {
+						console.error("[Terminal] Failed to restart:", error);
+						setConnectionError(error.message || "Failed to restart terminal");
+						isStreamReadyRef.current = true;
+						flushPendingEvents();
 					},
 				},
 			);
@@ -284,9 +752,16 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		}) => {
 			const { domEvent } = event;
 			if (domEvent.key === "Enter") {
-				const title = sanitizeForTitle(commandBufferRef.current);
-				if (title && parentTabIdRef.current) {
-					debouncedSetTabAutoTitleRef.current(parentTabIdRef.current, title);
+				// Don't auto-title from keyboard when in alternate screen (TUI apps like vim, codex)
+				// TUI apps set their own title via escape sequences handled by onTitleChange
+				// Use our own tracking (isAlternateScreenRef) because xterm.buffer.active.type
+				// is unreliable after HMR or recovery - the new xterm instance doesn't know
+				// about escape sequences that were sent before it was created.
+				if (!isAlternateScreenRef.current) {
+					const title = sanitizeForTitle(commandBufferRef.current);
+					if (title && parentTabIdRef.current) {
+						debouncedSetTabAutoTitleRef.current(parentTabIdRef.current, title);
+					}
 				}
 				commandBufferRef.current = "";
 			} else if (domEvent.key === "Backspace") {
@@ -321,14 +796,16 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 					if (initialCommands || initialCwd) {
 						clearPaneInitialDataRef.current(paneId);
 					}
-					// Always apply initial state (scrollback) first, then flush pending events
-					// This ensures we don't lose terminal history when reattaching
-					applyInitialState(result);
-					setSubscriptionEnabled(true);
-					flushPendingEvents();
+					// Defer initial state restoration until xterm has rendered once.
+					// Streaming is enabled only after restoration is queued into xterm.
+					pendingInitialStateRef.current = result;
+					maybeApplyInitialState();
 				},
-				onError: () => {
-					setSubscriptionEnabled(true);
+				onError: (error) => {
+					console.error("[Terminal] Failed to create/attach:", error);
+					setConnectionError(error.message || "Failed to connect to terminal");
+					isStreamReadyRef.current = true;
+					flushPendingEvents();
 				},
 			},
 		);
@@ -381,10 +858,15 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			onPaste: (text) => {
 				commandBufferRef.current += text;
 			},
+			onWrite: handleWrite,
+			isBracketedPasteEnabled: () => isBracketedPasteRef.current,
 		});
 
 		return () => {
 			isUnmounted = true;
+			if (firstRenderFallback) {
+				clearTimeout(firstRenderFallback);
+			}
 			inputDisposable.dispose();
 			keyDisposable.dispose();
 			titleDisposable.dispose();
@@ -396,14 +878,45 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 			cleanupQuerySuppression();
 			unregisterClearCallbackRef.current(paneId);
 			debouncedSetTabAutoTitleRef.current?.cancel?.();
-			// Detach instead of kill to keep PTY running for reattachment
-			detachRef.current({ paneId });
-			setSubscriptionEnabled(false);
-			xterm.dispose();
+
+			// Debounce detach to handle React StrictMode's unmount/remount cycle.
+			// If the component remounts quickly (as in StrictMode), the new mount will
+			// cancel this timeout, preventing the detach from corrupting terminal state.
+			const detachTimeout = setTimeout(() => {
+				detachRef.current({ paneId });
+				pendingDetaches.delete(paneId);
+			}, 50);
+			pendingDetaches.set(paneId, detachTimeout);
+
+			isStreamReadyRef.current = false;
+			didFirstRenderRef.current = false;
+			pendingInitialStateRef.current = null;
+			isAlternateScreenRef.current = false;
+			isBracketedPasteRef.current = false;
+			modeScanBufferRef.current = "";
+			renderDisposableRef.current?.dispose();
+			renderDisposableRef.current = null;
+
+			// Delay xterm.dispose() to let internal timeouts complete.
+			// xterm.open() schedules a setTimeout for Viewport.syncScrollArea.
+			// If we dispose synchronously, that timeout fires after _renderer is
+			// cleared, causing "Cannot read properties of undefined (reading 'dimensions')".
+			// Using setTimeout(0) ensures our dispose runs after xterm's internal callback.
+			setTimeout(() => {
+				xterm.dispose();
+			}, 0);
+
 			xtermRef.current = null;
 			searchAddonRef.current = null;
+			rendererRef.current = null;
 		};
-	}, [paneId, workspaceId, workspaceCwd]);
+	}, [
+		paneId,
+		workspaceId,
+		flushPendingEvents,
+		maybeApplyInitialState,
+		setConnectionError,
+	]);
 
 	useEffect(() => {
 		const xterm = xtermRef.current;
@@ -446,6 +959,21 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 				isOpen={isSearchOpen}
 				onClose={() => setIsSearchOpen(false)}
 			/>
+			{connectionError && (
+				<div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/80">
+					<div className="mb-4 px-4 text-center text-red-400">
+						<p className="font-semibold">Connection Error</p>
+						<p className="mt-1 text-sm text-gray-400">{connectionError}</p>
+					</div>
+					<button
+						type="button"
+						onClick={handleRetryConnection}
+						className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white transition-colors hover:bg-blue-700"
+					>
+						Retry Connection
+					</button>
+				</div>
+			)}
 			<div ref={terminalRef} className="h-full w-full" />
 		</div>
 	);

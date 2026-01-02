@@ -1,21 +1,20 @@
 import { Button } from "@superset/ui/button";
 import { Input } from "@superset/ui/input";
-import { toast } from "@superset/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
 import { cn } from "@superset/ui/utils";
-import { useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { HiMiniXMark } from "react-icons/hi2";
 import { LuGitBranch } from "react-icons/lu";
-import { trpc } from "renderer/lib/trpc";
 import {
-	useDeleteWorkspace,
 	useReorderWorkspaces,
 	useSetActiveWorkspace,
+	useWorkspaceDeleteHandler,
 } from "renderer/react-query/workspaces";
 import { useCloseSettings } from "renderer/stores/app-state";
 import { useTabsStore } from "renderer/stores/tabs/store";
+import { extractPaneIdsFromLayout } from "renderer/stores/tabs/utils";
 import { BranchSwitcher } from "./BranchSwitcher";
+import { DELETE_TOOLTIP_DELAY, WORKSPACE_TOOLTIP_DELAY } from "./constants";
 import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
 import { useWorkspaceRename } from "./useWorkspaceRename";
 import { WorkspaceItemContextMenu } from "./WorkspaceItemContextMenu";
@@ -30,6 +29,7 @@ interface WorkspaceItemProps {
 	branch?: string;
 	title: string;
 	isActive: boolean;
+	isUnread?: boolean;
 	index: number;
 	width: number;
 	onMouseEnter?: () => void;
@@ -44,6 +44,7 @@ export function WorkspaceItem({
 	branch,
 	title,
 	isActive,
+	isUnread = false,
 	index,
 	width,
 	onMouseEnter,
@@ -52,104 +53,29 @@ export function WorkspaceItem({
 	const isBranchWorkspace = workspaceType === "branch";
 	const setActive = useSetActiveWorkspace();
 	const reorderWorkspaces = useReorderWorkspaces();
-	const deleteWorkspace = useDeleteWorkspace();
 	const closeSettings = useCloseSettings();
-	const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 	const tabs = useTabsStore((s) => s.tabs);
 	const panes = useTabsStore((s) => s.panes);
+	const clearWorkspaceAttention = useTabsStore(
+		(s) => s.clearWorkspaceAttention,
+	);
 	const rename = useWorkspaceRename(id, title);
 
-	// Query to check if workspace is empty - only enabled when needed
-	const canDeleteQuery = trpc.workspaces.canDelete.useQuery(
-		{ id },
-		{ enabled: false },
-	);
+	// Shared delete logic
+	const { showDeleteDialog, setShowDeleteDialog, handleDeleteClick } =
+		useWorkspaceDeleteHandler();
 
-	const handleDeleteClick = async () => {
-		// Prevent double-clicks and race conditions
-		if (deleteWorkspace.isPending || canDeleteQuery.isFetching) return;
-
-		try {
-			// Always fetch fresh data before deciding
-			const { data: canDeleteData } = await canDeleteQuery.refetch();
-
-			// For branch workspaces, only show dialog if there are active terminals
-			// (no destructive action - branch stays in repo)
-			if (isBranchWorkspace) {
-				if (
-					canDeleteData?.activeTerminalCount &&
-					canDeleteData.activeTerminalCount > 0
-				) {
-					setShowDeleteDialog(true);
-				} else {
-					// Close directly without confirmation
-					toast.promise(deleteWorkspace.mutateAsync({ id }), {
-						loading: `Closing "${title}"...`,
-						success: `Workspace "${title}" closed`,
-						error: (error) =>
-							error instanceof Error
-								? `Failed to close workspace: ${error.message}`
-								: "Failed to close workspace",
-					});
-				}
-				return;
-			}
-
-			// For worktree workspaces, check all conditions
-			const isEmpty =
-				canDeleteData?.canDelete &&
-				canDeleteData.activeTerminalCount === 0 &&
-				!canDeleteData.warning &&
-				!canDeleteData.hasChanges &&
-				!canDeleteData.hasUnpushedCommits;
-
-			if (isEmpty) {
-				// Delete directly without confirmation
-				toast.promise(deleteWorkspace.mutateAsync({ id }), {
-					loading: `Deleting "${title}"...`,
-					success: `Workspace "${title}" deleted`,
-					error: (error) =>
-						error instanceof Error
-							? `Failed to delete workspace: ${error.message}`
-							: "Failed to delete workspace",
-				});
-			} else {
-				// Show confirmation dialog
-				setShowDeleteDialog(true);
-			}
-		} catch {
-			// On error checking status, show dialog for user to decide
-			setShowDeleteDialog(true);
-		}
-	};
-
-	// Check if any pane in tabs belonging to this workspace needs attention
+	// Check if any pane in tabs belonging to this workspace needs attention (agent notifications)
 	const workspaceTabs = tabs.filter((t) => t.workspaceId === id);
 	const workspacePaneIds = new Set(
-		workspaceTabs.flatMap((t) => {
-			// Extract pane IDs from the layout (which is a MosaicNode<string>)
-			const collectPaneIds = (node: unknown): string[] => {
-				if (typeof node === "string") return [node];
-				if (
-					node &&
-					typeof node === "object" &&
-					"first" in node &&
-					"second" in node
-				) {
-					const branch = node as { first: unknown; second: unknown };
-					return [
-						...collectPaneIds(branch.first),
-						...collectPaneIds(branch.second),
-					];
-				}
-				return [];
-			};
-			return collectPaneIds(t.layout);
-		}),
+		workspaceTabs.flatMap((t) => extractPaneIdsFromLayout(t.layout)),
 	);
-	const needsAttention = Object.values(panes)
+	const hasPaneAttention = Object.values(panes)
 		.filter((p) => workspacePaneIds.has(p.id))
 		.some((p) => p.needsAttention);
+
+	// Show indicator if workspace is manually marked as unread OR has pane-level attention
+	const needsAttention = isUnread || hasPaneAttention;
 
 	const [{ isDragging }, drag] = useDrag(
 		() => ({
@@ -183,6 +109,7 @@ export function WorkspaceItem({
 				workspaceId={id}
 				worktreePath={worktreePath}
 				workspaceAlias={title}
+				isUnread={isUnread}
 				onRename={rename.startRename}
 				canRename={!isBranchWorkspace}
 				showHoverCard={!isBranchWorkspace}
@@ -201,6 +128,7 @@ export function WorkspaceItem({
 							if (!rename.isRenaming) {
 								closeSettings();
 								setActive.mutate({ id });
+								clearWorkspaceAttention(id);
 							}
 						}}
 						onDoubleClick={isBranchWorkspace ? undefined : rename.startRename}
@@ -230,7 +158,7 @@ export function WorkspaceItem({
 							/>
 						) : isBranchWorkspace ? (
 							<div className="flex items-center gap-2 flex-1 min-w-0">
-								<Tooltip delayDuration={600}>
+								<Tooltip delayDuration={WORKSPACE_TOOLTIP_DELAY}>
 									<TooltipTrigger asChild>
 										<div className="flex items-center gap-2 flex-1 min-w-0">
 											<div className="flex items-center justify-center size-5 rounded bg-primary/10 shrink-0">
@@ -292,7 +220,7 @@ export function WorkspaceItem({
 
 					{/* Only show close button for worktree workspaces */}
 					{!isBranchWorkspace && (
-						<Tooltip delayDuration={500}>
+						<Tooltip delayDuration={DELETE_TOOLTIP_DELAY}>
 							<TooltipTrigger asChild>
 								<Button
 									type="button"
@@ -306,13 +234,13 @@ export function WorkspaceItem({
 										"mt-1 absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer size-5 group-hover:opacity-100",
 										isActive ? "opacity-90" : "opacity-0",
 									)}
-									aria-label="Delete workspace"
+									aria-label="Close or delete workspace"
 								>
 									<HiMiniXMark />
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent side="bottom" showArrow={false}>
-								Delete workspace
+								Close or delete
 							</TooltipContent>
 						</Tooltip>
 					)}

@@ -5,6 +5,7 @@ import type {
 	ExternalApp,
 	GitHubStatus,
 	GitStatus,
+	TerminalLinkBehavior,
 	TerminalPreset,
 	WorkspaceType,
 } from "./zod";
@@ -100,6 +101,7 @@ export const workspaces = sqliteTable(
 		lastOpenedAt: integer("last_opened_at")
 			.notNull()
 			.$defaultFn(() => Date.now()),
+		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
 	},
 	(table) => [
 		index("workspaces_project_id_idx").on(table.projectId),
@@ -110,6 +112,11 @@ export const workspaces = sqliteTable(
 
 export type InsertWorkspace = typeof workspaces.$inferInsert;
 export type SelectWorkspace = typeof workspaces.$inferSelect;
+
+/**
+ * Navigation style for workspace display
+ */
+export type NavigationStyle = "top-bar" | "sidebar";
 
 /**
  * Settings table - single row with typed columns
@@ -127,6 +134,11 @@ export const settings = sqliteTable("settings", {
 	selectedRingtoneId: text("selected_ringtone_id"),
 	activeOrganizationId: text("active_organization_id"),
 	confirmOnQuit: integer("confirm_on_quit", { mode: "boolean" }),
+	terminalLinkBehavior: text(
+		"terminal_link_behavior",
+	).$type<TerminalLinkBehavior>(),
+	navigationStyle: text("navigation_style").$type<NavigationStyle>(),
+	terminalPersistence: integer("terminal_persistence", { mode: "boolean" }),
 });
 
 export type InsertSettings = typeof settings.$inferInsert;

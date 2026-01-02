@@ -4,7 +4,7 @@ import { projects, workspaces, worktrees } from "@superset/local-db";
 import { observable } from "@trpc/server/observable";
 import { eq } from "drizzle-orm";
 import { localDb } from "main/lib/local-db";
-import { terminalManager } from "main/lib/terminal";
+import { getActiveTerminalManager } from "main/lib/terminal";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
 import { getWorkspacePath } from "../workspaces/utils/worktree";
@@ -25,6 +25,9 @@ import { resolveCwd } from "./utils";
  * - SUPERSET_PORT: The hooks server port for agent completion notifications
  */
 export const createTerminalRouter = () => {
+	// Get the active terminal manager (in-process or daemon-based)
+	const terminalManager = getActiveTerminalManager();
+
 	return router({
 		createOrAttach: publicProcedure
 			.input(
@@ -87,6 +90,8 @@ export const createTerminalRouter = () => {
 					isNew: result.isNew,
 					scrollback: result.scrollback,
 					wasRecovered: result.wasRecovered,
+					// Include snapshot for daemon mode (renderer can use for rehydration)
+					snapshot: result.snapshot,
 				};
 			}),
 
@@ -98,7 +103,25 @@ export const createTerminalRouter = () => {
 				}),
 			)
 			.mutation(async ({ input }) => {
-				terminalManager.write(input);
+				try {
+					terminalManager.write(input);
+				} catch (error) {
+					const message =
+						error instanceof Error ? error.message : "Write failed";
+
+					// If session is gone, emit exit instead of error.
+					// This completes the subscription cleanly and prevents error toast floods
+					// when workspaces with terminals are deleted.
+					if (message.includes("not found or not alive")) {
+						terminalManager.emit(`exit:${input.paneId}`, 0, "SIGTERM");
+						return;
+					}
+
+					terminalManager.emit(`error:${input.paneId}`, {
+						error: message,
+						code: "WRITE_FAILED",
+					});
+				}
 			}),
 
 		resize: publicProcedure
@@ -252,6 +275,8 @@ export const createTerminalRouter = () => {
 				return observable<
 					| { type: "data"; data: string }
 					| { type: "exit"; exitCode: number; signal?: number }
+					| { type: "disconnect"; reason: string }
+					| { type: "error"; error: string; code?: string }
 				>((emit) => {
 					const onData = (data: string) => {
 						emit.next({ type: "data", data });
@@ -262,13 +287,29 @@ export const createTerminalRouter = () => {
 						emit.complete();
 					};
 
+					const onDisconnect = (reason: string) => {
+						emit.next({ type: "disconnect", reason });
+					};
+
+					const onError = (payload: { error: string; code?: string }) => {
+						emit.next({
+							type: "error",
+							error: payload.error,
+							code: payload.code,
+						});
+					};
+
 					terminalManager.on(`data:${paneId}`, onData);
 					terminalManager.on(`exit:${paneId}`, onExit);
+					terminalManager.on(`disconnect:${paneId}`, onDisconnect);
+					terminalManager.on(`error:${paneId}`, onError);
 
 					// Cleanup on unsubscribe
 					return () => {
 						terminalManager.off(`data:${paneId}`, onData);
 						terminalManager.off(`exit:${paneId}`, onExit);
+						terminalManager.off(`disconnect:${paneId}`, onDisconnect);
+						terminalManager.off(`error:${paneId}`, onError);
 					};
 				});
 			}),

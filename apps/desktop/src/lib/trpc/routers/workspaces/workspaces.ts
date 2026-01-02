@@ -7,10 +7,10 @@ import {
 	workspaces,
 	worktrees,
 } from "@superset/local-db";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNotNull, not } from "drizzle-orm";
 import { track } from "main/lib/analytics";
 import { localDb } from "main/lib/local-db";
-import { terminalManager } from "main/lib/terminal";
+import { getActiveTerminalManager } from "main/lib/terminal";
 import { SUPERSET_DIR_NAME, WORKTREES_DIR_NAME } from "shared/constants";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
@@ -305,22 +305,11 @@ export const createWorkspacesRouter = () => {
 					};
 				}
 
-				// Shift existing workspaces to make room at front
-				const projectWorkspaces = localDb
-					.select()
-					.from(workspaces)
-					.where(eq(workspaces.projectId, input.projectId))
-					.all();
-				for (const ws of projectWorkspaces) {
-					localDb
-						.update(workspaces)
-						.set({ tabOrder: ws.tabOrder + 1 })
-						.where(eq(workspaces.id, ws.id))
-						.run();
-				}
-
-				// Insert new workspace
-				const workspace = localDb
+				// Insert new workspace first with conflict handling for race conditions
+				// The unique partial index (projectId WHERE type='branch') prevents duplicates
+				// We insert first, then shift - this prevents race conditions where
+				// concurrent calls both shift before either inserts (causing double shifts)
+				const insertResult = localDb
 					.insert(workspaces)
 					.values({
 						projectId: input.projectId,
@@ -329,8 +318,54 @@ export const createWorkspacesRouter = () => {
 						name: branch,
 						tabOrder: 0,
 					})
+					.onConflictDoNothing()
 					.returning()
-					.get();
+					.all();
+
+				const wasExisting = insertResult.length === 0;
+
+				// Only shift existing workspaces if we successfully inserted
+				// Losers of the race should NOT shift (they didn't create anything)
+				if (!wasExisting) {
+					const newWorkspaceId = insertResult[0].id;
+					const projectWorkspaces = localDb
+						.select()
+						.from(workspaces)
+						.where(
+							and(
+								eq(workspaces.projectId, input.projectId),
+								// Exclude the workspace we just inserted
+								not(eq(workspaces.id, newWorkspaceId)),
+							),
+						)
+						.all();
+					for (const ws of projectWorkspaces) {
+						localDb
+							.update(workspaces)
+							.set({ tabOrder: ws.tabOrder + 1 })
+							.where(eq(workspaces.id, ws.id))
+							.run();
+					}
+				}
+
+				// If insert returned nothing, another concurrent call won the race
+				// Fetch the existing workspace instead
+				const workspace =
+					insertResult[0] ??
+					localDb
+						.select()
+						.from(workspaces)
+						.where(
+							and(
+								eq(workspaces.projectId, input.projectId),
+								eq(workspaces.type, "branch"),
+							),
+						)
+						.get();
+
+				if (!workspace) {
+					throw new Error("Failed to create or find branch workspace");
+				}
 
 				// Update settings
 				localDb
@@ -342,41 +377,43 @@ export const createWorkspacesRouter = () => {
 					})
 					.run();
 
-				// Update project
-				const activeProjects = localDb
-					.select()
-					.from(projects)
-					.where(isNotNull(projects.tabOrder))
-					.all();
-				const maxProjectTabOrder =
-					activeProjects.length > 0
-						? Math.max(...activeProjects.map((p) => p.tabOrder ?? 0))
-						: -1;
+				// Update project (only if we actually inserted a new workspace)
+				if (!wasExisting) {
+					const activeProjects = localDb
+						.select()
+						.from(projects)
+						.where(isNotNull(projects.tabOrder))
+						.all();
+					const maxProjectTabOrder =
+						activeProjects.length > 0
+							? Math.max(...activeProjects.map((p) => p.tabOrder ?? 0))
+							: -1;
 
-				localDb
-					.update(projects)
-					.set({
-						lastOpenedAt: Date.now(),
-						tabOrder:
-							project.tabOrder === null
-								? maxProjectTabOrder + 1
-								: project.tabOrder,
-					})
-					.where(eq(projects.id, input.projectId))
-					.run();
+					localDb
+						.update(projects)
+						.set({
+							lastOpenedAt: Date.now(),
+							tabOrder:
+								project.tabOrder === null
+									? maxProjectTabOrder + 1
+									: project.tabOrder,
+						})
+						.where(eq(projects.id, input.projectId))
+						.run();
 
-				track("workspace_opened", {
-					workspace_id: workspace.id,
-					project_id: project.id,
-					type: "branch",
-					was_existing: false,
-				});
+					track("workspace_opened", {
+						workspace_id: workspace.id,
+						project_id: project.id,
+						type: "branch",
+						was_existing: false,
+					});
+				}
 
 				return {
 					workspace,
 					worktreePath: project.mainRepoPath,
 					projectId: project.id,
-					wasExisting: false,
+					wasExisting,
 				};
 			}),
 
@@ -457,7 +494,7 @@ export const createWorkspacesRouter = () => {
 				await safeCheckoutBranch(project.mainRepoPath, input.branch);
 
 				// Send newline to terminals so their prompts refresh with new branch
-				terminalManager.refreshPromptsForWorkspace(workspace.id);
+				getActiveTerminalManager().refreshPromptsForWorkspace(workspace.id);
 
 				// Update the workspace - name is always the branch for branch workspaces
 				const now = Date.now();
@@ -546,6 +583,7 @@ export const createWorkspacesRouter = () => {
 						createdAt: number;
 						updatedAt: number;
 						lastOpenedAt: number;
+						isUnread: boolean;
 					}>;
 				}
 			>();
@@ -575,6 +613,7 @@ export const createWorkspacesRouter = () => {
 						...workspace,
 						type: workspace.type as "worktree" | "branch",
 						worktreePath: getWorkspacePath(workspace) ?? "",
+						isUnread: workspace.isUnread ?? false,
 					});
 				}
 			}
@@ -738,7 +777,9 @@ export const createWorkspacesRouter = () => {
 				}
 
 				const activeTerminalCount =
-					terminalManager.getSessionCountByWorkspaceId(input.id);
+					await getActiveTerminalManager().getSessionCountByWorkspaceId(
+						input.id,
+					);
 
 				// Branch workspaces are non-destructive to close - no git checks needed
 				if (workspace.type === "branch") {
@@ -852,9 +893,8 @@ export const createWorkspacesRouter = () => {
 				}
 
 				// Kill all terminal processes in this workspace first
-				const terminalResult = await terminalManager.killByWorkspaceId(
-					input.id,
-				);
+				const terminalResult =
+					await getActiveTerminalManager().killByWorkspaceId(input.id);
 
 				const project = localDb
 					.select()
@@ -977,10 +1017,18 @@ export const createWorkspacesRouter = () => {
 					throw new Error(`Workspace ${input.id} not found`);
 				}
 
+				// Track if workspace was unread before clearing
+				const wasUnread = workspace.isUnread ?? false;
+
 				const now = Date.now();
 				localDb
 					.update(workspaces)
-					.set({ lastOpenedAt: now, updatedAt: now })
+					.set({
+						lastOpenedAt: now,
+						updatedAt: now,
+						// Auto-clear unread state when switching to workspace
+						isUnread: false,
+					})
 					.where(eq(workspaces.id, input.id))
 					.run();
 
@@ -993,7 +1041,7 @@ export const createWorkspacesRouter = () => {
 					})
 					.run();
 
-				return { success: true };
+				return { success: true, wasUnread };
 			}),
 
 		reorder: publicProcedure
@@ -1331,6 +1379,27 @@ export const createWorkspacesRouter = () => {
 				};
 			}),
 
+		setUnread: publicProcedure
+			.input(z.object({ id: z.string(), isUnread: z.boolean() }))
+			.mutation(({ input }) => {
+				const workspace = localDb
+					.select()
+					.from(workspaces)
+					.where(eq(workspaces.id, input.id))
+					.get();
+				if (!workspace) {
+					throw new Error(`Workspace ${input.id} not found`);
+				}
+
+				localDb
+					.update(workspaces)
+					.set({ isUnread: input.isUnread })
+					.where(eq(workspaces.id, input.id))
+					.run();
+
+				return { success: true, isUnread: input.isUnread };
+			}),
+
 		close: publicProcedure
 			.input(z.object({ id: z.string() }))
 			.mutation(async ({ input }) => {
@@ -1344,9 +1413,8 @@ export const createWorkspacesRouter = () => {
 					throw new Error("Workspace not found");
 				}
 
-				const terminalResult = await terminalManager.killByWorkspaceId(
-					input.id,
-				);
+				const terminalResult =
+					await getActiveTerminalManager().killByWorkspaceId(input.id);
 
 				// Delete workspace record ONLY, keep worktree
 				localDb.delete(workspaces).where(eq(workspaces.id, input.id)).run();

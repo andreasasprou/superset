@@ -1,4 +1,10 @@
 import type { MosaicBranch, MosaicNode } from "react-mosaic-component";
+import type { ChangeCategory } from "shared/changes-types";
+import type {
+	DiffLayout,
+	FileViewerMode,
+	FileViewerState,
+} from "shared/tabs-types";
 import type { Pane, PaneType, Tab } from "./types";
 
 /**
@@ -79,6 +85,62 @@ export const createPane = (
 		isNew: true,
 		initialCommands: options?.initialCommands,
 		initialCwd: options?.initialCwd,
+	};
+};
+
+/**
+ * Options for creating a file-viewer pane
+ */
+export interface CreateFileViewerPaneOptions {
+	filePath: string;
+	viewMode?: FileViewerMode;
+	isLocked?: boolean;
+	diffLayout?: DiffLayout;
+	diffCategory?: ChangeCategory;
+	commitHash?: string;
+	oldPath?: string;
+}
+
+/**
+ * Creates a new file-viewer pane with the given properties
+ */
+export const createFileViewerPane = (
+	tabId: string,
+	options: CreateFileViewerPaneOptions,
+): Pane => {
+	const id = generateId("pane");
+
+	// Determine default view mode based on file and category
+	let defaultViewMode: FileViewerMode = "raw";
+	if (options.diffCategory) {
+		defaultViewMode = "diff";
+	} else if (
+		options.filePath.endsWith(".md") ||
+		options.filePath.endsWith(".markdown") ||
+		options.filePath.endsWith(".mdx")
+	) {
+		defaultViewMode = "rendered";
+	}
+
+	const fileViewer: FileViewerState = {
+		filePath: options.filePath,
+		viewMode: options.viewMode ?? defaultViewMode,
+		isLocked: options.isLocked ?? false,
+		diffLayout: options.diffLayout ?? "inline",
+		diffCategory: options.diffCategory,
+		commitHash: options.commitHash,
+		oldPath: options.oldPath,
+	};
+
+	// Use filename for display name
+	const fileName = options.filePath.split("/").pop() || options.filePath;
+
+	return {
+		id,
+		tabId,
+		type: "file-viewer",
+		name: fileName,
+		fileViewer,
 	};
 };
 
