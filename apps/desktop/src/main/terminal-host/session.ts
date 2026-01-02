@@ -89,6 +89,7 @@ export class Session {
 	private subprocessStdoutPaused = false;
 	private lastAttachedAt: Date;
 	private exitCode: number | null = null;
+	private ptyPid: number | null = null;
 	private disposed = false;
 	private terminatingAt: number | null = null;
 	private subprocessDecoder: PtySubprocessFrameDecoder | null = null;
