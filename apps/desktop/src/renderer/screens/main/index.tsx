@@ -22,7 +22,7 @@ import { useAgentHookListener } from "renderer/stores/tabs/useAgentHookListener"
 import { findPanePath, getFirstPaneId } from "renderer/stores/tabs/utils";
 import { useWorkspaceSidebarStore } from "renderer/stores/workspace-sidebar-state";
 import { DEFAULT_NAVIGATION_STYLE } from "shared/constants";
-import { getHotkey, HOTKEYS } from "shared/hotkeys";
+import { getHotkey } from "shared/hotkeys";
 import { dragDropManager } from "../../lib/dnd";
 import { AppFrame } from "./components/AppFrame";
 import { Background } from "./components/Background";

@@ -50,7 +50,6 @@ export function TopBar({ navigationStyle = "top-bar" }: TopBarProps) {
 				<WorkspaceControls
 					workspaceId={activeWorkspace?.id}
 					worktreePath={activeWorkspace?.worktreePath}
-					branch={activeWorkspace?.worktree?.branch}
 				/>
 				<AvatarDropdown />
 				{!isMac && <WindowControls />}
