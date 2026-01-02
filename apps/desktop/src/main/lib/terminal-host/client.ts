@@ -14,6 +14,7 @@ import { EventEmitter } from "node:events";
 import {
 	existsSync,
 	mkdirSync,
+	openSync,
 	readFileSync,
 	unlinkSync,
 	writeFileSync,
@@ -587,10 +588,23 @@ export class TerminalHostClient extends EventEmitter {
 				`[TerminalHostClient] Spawning daemon with execPath: ${process.execPath}`,
 			);
 
+			// Open log file for daemon output (helps debug daemon-side issues)
+			const logPath = join(SUPERSET_HOME_DIR, "daemon.log");
+			let logFd: number;
+			try {
+				logFd = openSync(logPath, "a");
+			} catch (error) {
+				console.warn(
+					`[TerminalHostClient] Failed to open daemon log file: ${error}`,
+				);
+				// Fall back to ignoring output if we can't open log file
+				logFd = -1;
+			}
+
 			// Spawn daemon as detached process
 			const child = spawn(process.execPath, [daemonScript], {
 				detached: true,
-				stdio: "ignore",
+				stdio: logFd >= 0 ? ["ignore", logFd, logFd] : "ignore",
 				env: {
 					...process.env,
 					ELECTRON_RUN_AS_NODE: "1",

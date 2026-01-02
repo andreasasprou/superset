@@ -108,6 +108,15 @@ export const createTerminalRouter = () => {
 				} catch (error) {
 					const message =
 						error instanceof Error ? error.message : "Write failed";
+
+					// If session is gone, emit exit instead of error.
+					// This completes the subscription cleanly and prevents error toast floods
+					// when workspaces with terminals are deleted.
+					if (message.includes("not found or not alive")) {
+						terminalManager.emit(`exit:${input.paneId}`, 0, "SIGTERM");
+						return;
+					}
+
 					terminalManager.emit(`error:${input.paneId}`, {
 						error: message,
 						code: "WRITE_FAILED",

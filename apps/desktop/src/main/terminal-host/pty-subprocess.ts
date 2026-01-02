@@ -299,16 +299,24 @@ function handleSpawn(payload: Buffer): void {
 		});
 
 		ptyProcess.onExit(({ exitCode, signal }) => {
+			console.error(
+				`[pty-subprocess] onExit fired: exitCode=${exitCode}, signal=${signal}`,
+			);
 			flushOutput();
 
 			const exitPayload = Buffer.allocUnsafe(8);
 			exitPayload.writeInt32LE(exitCode ?? 0, 0);
 			exitPayload.writeInt32LE(signal ?? 0, 4);
 			send(PtySubprocessIpcType.Exit, exitPayload);
+			console.error("[pty-subprocess] onExit: EXIT frame sent");
 
 			ptyProcess = null;
 			ptyFd = null;
-			setTimeout(() => process.exit(0), 100);
+			console.error("[pty-subprocess] onExit: scheduling process.exit(0)");
+			setTimeout(() => {
+				console.error("[pty-subprocess] onExit: calling process.exit(0)");
+				process.exit(0);
+			}, 100);
 		});
 
 		const pidPayload = Buffer.allocUnsafe(4);
@@ -343,13 +351,67 @@ function handleResize(payload: Buffer): void {
 }
 
 function handleKill(payload: Buffer): void {
-	if (!ptyProcess) return;
-	try {
-		const signal = payload.length > 0 ? payload.toString("utf8") : undefined;
-		ptyProcess.kill(signal);
-	} catch {
-		// Ignore
+	const signal = payload.length > 0 ? payload.toString("utf8") : "SIGTERM";
+	console.error(
+		`[pty-subprocess] handleKill: ptyProcess=${!!ptyProcess}, pid=${ptyProcess?.pid}, signal=${signal}`,
+	);
+
+	if (!ptyProcess) {
+		console.error("[pty-subprocess] handleKill: no ptyProcess to kill");
+		return;
 	}
+
+	const pid = ptyProcess.pid;
+
+	// Step 1: Send the requested signal (usually SIGTERM for graceful shutdown)
+	try {
+		console.error(
+			`[pty-subprocess] handleKill: calling pty.kill(${signal}) on pid ${pid}`,
+		);
+		ptyProcess.kill(signal);
+		console.error("[pty-subprocess] handleKill: pty.kill() returned");
+	} catch (error) {
+		console.error(
+			`[pty-subprocess] handleKill: pty.kill() threw: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+
+	// Step 2: Escalate to SIGKILL if still alive after 2 seconds
+	// node-pty's onExit callback may not fire reliably after pty.kill()
+	const escalationTimer = setTimeout(() => {
+		if (!ptyProcess) return; // Already exited via onExit
+
+		console.error(
+			`[pty-subprocess] handleKill: escalating to SIGKILL for pid ${pid}`,
+		);
+		try {
+			ptyProcess.kill("SIGKILL");
+		} catch {
+			// Process may already be dead
+		}
+
+		// Step 3: Force completion if onExit still hasn't fired after another 1 second
+		// This ensures the subprocess exits even if node-pty never emits onExit
+		const forceExitTimer = setTimeout(() => {
+			if (!ptyProcess) return; // Finally exited via onExit
+
+			console.error(
+				`[pty-subprocess] handleKill: forcing exit, onExit never fired for pid ${pid}`,
+			);
+
+			// Synthesize Exit frame since onExit won't fire
+			const exitPayload = Buffer.allocUnsafe(8);
+			exitPayload.writeInt32LE(-1, 0); // Unknown exit code
+			exitPayload.writeInt32LE(9, 4); // SIGKILL signal number
+			send(PtySubprocessIpcType.Exit, exitPayload);
+
+			ptyProcess = null;
+			ptyFd = null;
+			process.exit(0);
+		}, 1000);
+		forceExitTimer.unref();
+	}, 2000);
+	escalationTimer.unref();
 }
 
 function handleDispose(): void {
