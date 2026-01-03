@@ -136,6 +136,9 @@ export function FileViewerPane({
 	const diffCategory = fileViewer?.diffCategory;
 	const commitHash = fileViewer?.commitHash;
 	const oldPath = fileViewer?.oldPath;
+	// Line/column for initial scroll position (raw mode only, applied once)
+	const initialLine = fileViewer?.initialLine;
+	const initialColumn = fileViewer?.initialColumn;
 
 	// Fetch branch info for against-base diffs (P1-1)
 	const { data: branchData } = trpc.changes.getBranches.useQuery(
@@ -146,6 +149,9 @@ export function FileViewerPane({
 
 	// Track if we're saving from raw mode to know when to clear draft
 	const savingFromRawRef = useRef(false);
+
+	// Track if we've applied initial line/column navigation (reset on file change)
+	const hasAppliedInitialLocationRef = useRef(false);
 
 	// Save mutation
 	const saveFileMutation = trpc.changes.saveFile.useMutation({
@@ -247,13 +253,20 @@ export function FileViewerPane({
 		}
 	}, []);
 
-	// Reset dirty state and draft when file changes
+	// Reset dirty state, draft, and initial location tracking when file changes
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Reset on file change only
 	useEffect(() => {
 		setIsDirty(false);
 		originalContentRef.current = "";
 		draftContentRef.current = null;
+		hasAppliedInitialLocationRef.current = false;
 	}, [filePath]);
+
+	// P1: Reset navigation flag when line/column changes (e.g., clicking same file from terminal with different line)
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Only reset when coordinates change
+	useEffect(() => {
+		hasAppliedInitialLocationRef.current = false;
+	}, [initialLine, initialColumn]);
 
 	// Fetch raw file content - always call hook, use enabled to control fetching
 	const { data: rawFileData, isLoading: isLoadingRaw } =
@@ -295,6 +308,39 @@ export function FileViewerPane({
 			originalContentRef.current = rawFileData.content;
 		}
 	}, [rawFileData]);
+
+	// Apply initial line/column navigation when raw content is ready
+	// NOTE: Line/column navigation only supported in raw mode.
+	// Diff mode has different line numbers between sides; rendered mode has no line concept.
+	useEffect(() => {
+		if (
+			viewMode !== "raw" ||
+			!editorRef.current ||
+			!initialLine ||
+			hasAppliedInitialLocationRef.current ||
+			isLoadingRaw ||
+			!rawFileData?.ok
+		) {
+			return;
+		}
+
+		const editor = editorRef.current;
+		const model = editor.getModel();
+		if (!model) return;
+
+		// Clamp to valid range to handle lines that exceed file length
+		const lineCount = model.getLineCount();
+		const safeLine = Math.max(1, Math.min(initialLine, lineCount));
+		const maxColumn = model.getLineMaxColumn(safeLine);
+		const safeColumn = Math.max(1, Math.min(initialColumn ?? 1, maxColumn));
+
+		const position = { lineNumber: safeLine, column: safeColumn };
+		editor.setPosition(position);
+		editor.revealPositionInCenter(position);
+		editor.focus();
+
+		hasAppliedInitialLocationRef.current = true;
+	}, [viewMode, initialLine, initialColumn, isLoadingRaw, rawFileData]);
 
 	// Early return AFTER hooks
 	if (!fileViewer) {
@@ -431,7 +477,9 @@ export function FileViewerPane({
 						? "Binary file preview not supported"
 						: rawFileData?.reason === "outside-worktree"
 							? "File is outside worktree"
-							: "File not found";
+							: rawFileData?.reason === "symlink-escape"
+								? "File is a symlink pointing outside worktree"
+								: "File not found";
 			return (
 				<div className="flex items-center justify-center h-full text-muted-foreground">
 					{errorMessage}

@@ -2,7 +2,15 @@ import { execSync } from "node:child_process";
 import os from "node:os";
 import defaultShell from "default-shell";
 import { PORTS } from "shared/constants";
+import { env } from "shared/env.shared";
 import { getShellEnv } from "../agent-setup/shell-wrappers";
+
+/**
+ * Current hook protocol version.
+ * Increment when making breaking changes to the hook protocol.
+ * The server logs this for debugging version mismatches.
+ */
+export const HOOK_PROTOCOL_VERSION = "2";
 
 export const FALLBACK_SHELL = os.platform() === "win32" ? "cmd.exe" : "/bin/sh";
 export const SHELL_CRASH_THRESHOLD_MS = 1000;
@@ -86,7 +94,7 @@ export function buildTerminalEnv(params: {
 	const shellEnv = getShellEnv(shell);
 	const locale = getLocale(baseEnv);
 
-	const env: Record<string, string> = {
+	const terminalEnv: Record<string, string> = {
 		...baseEnv,
 		...shellEnv,
 		TERM_PROGRAM: "Superset",
@@ -100,9 +108,13 @@ export function buildTerminalEnv(params: {
 		SUPERSET_WORKSPACE_PATH: workspacePath || "",
 		SUPERSET_ROOT_PATH: rootPath || "",
 		SUPERSET_PORT: String(PORTS.NOTIFICATIONS),
+		// Environment identifier for dev/prod separation
+		SUPERSET_ENV: env.NODE_ENV === "development" ? "development" : "production",
+		// Hook protocol version for forward compatibility
+		SUPERSET_HOOK_VERSION: HOOK_PROTOCOL_VERSION,
 	};
 
-	delete env.GOOGLE_API_KEY;
+	delete terminalEnv.GOOGLE_API_KEY;
 
-	return env;
+	return terminalEnv;
 }

@@ -11,6 +11,15 @@ import type { ChangeCategory } from "./changes-types";
 export type PaneType = "terminal" | "webview" | "file-viewer";
 
 /**
+ * Pane status for agent lifecycle indicators
+ * - idle: No indicator shown (default)
+ * - working: Agent actively processing (amber)
+ * - permission: Agent blocked, needs user action (red)
+ * - review: Agent completed, ready for review (green)
+ */
+export type PaneStatus = "idle" | "working" | "permission" | "review";
+
+/**
  * File viewer display modes
  */
 export type FileViewerMode = "rendered" | "raw" | "diff";
@@ -38,6 +47,10 @@ export interface FileViewerState {
 	commitHash?: string;
 	/** Original path for renamed files */
 	oldPath?: string;
+	/** Initial line to scroll to (raw mode only, transient - applied once) */
+	initialLine?: number;
+	/** Initial column to scroll to (raw mode only, transient - applied once) */
+	initialColumn?: number;
 }
 
 /**
@@ -49,7 +62,7 @@ export interface Pane {
 	type: PaneType;
 	name: string;
 	isNew?: boolean;
-	needsAttention?: boolean;
+	status?: PaneStatus;
 	initialCommands?: string[];
 	initialCwd?: string;
 	url?: string; // For webview panes

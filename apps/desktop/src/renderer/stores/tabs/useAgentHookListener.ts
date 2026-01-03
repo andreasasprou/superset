@@ -8,7 +8,7 @@ import { resolveNotificationTarget } from "./utils/resolve-notification-target";
 
 /**
  * Hook that listens for notification events via tRPC subscription.
- * Handles agent completions and focus requests from native notifications.
+ * Handles agent lifecycle events (Start, Stop, PermissionRequest) and focus requests.
  */
 export function useAgentHookListener() {
 	const setActiveWorkspace = useSetActiveWorkspace();
@@ -28,17 +28,36 @@ export function useAgentHookListener() {
 
 			const { paneId, workspaceId } = target;
 
-			if (event.type === NOTIFICATION_EVENTS.AGENT_COMPLETE) {
+			if (event.type === NOTIFICATION_EVENTS.AGENT_LIFECYCLE) {
 				if (!paneId) return;
 
-				const activeTabId = state.activeTabIds[workspaceId];
-				const focusedPaneId = activeTabId && state.focusedPaneIds[activeTabId];
-				const isAlreadyActive =
-					activeWorkspaceRef.current?.id === workspaceId &&
-					focusedPaneId === paneId;
+				const lifecycleEvent = event.data;
+				if (!lifecycleEvent) return;
 
-				if (!isAlreadyActive) {
-					state.setNeedsAttention(paneId, true);
+				const { eventType } = lifecycleEvent;
+
+				if (eventType === "Start") {
+					// Agent started working - always set to working
+					state.setPaneStatus(paneId, "working");
+				} else if (eventType === "PermissionRequest") {
+					// Agent needs permission - always set to permission (overrides working)
+					state.setPaneStatus(paneId, "permission");
+				} else if (eventType === "Stop") {
+					// Agent completed - only mark as review if not currently active
+					const activeTabId = state.activeTabIds[workspaceId];
+					const focusedPaneId =
+						activeTabId && state.focusedPaneIds[activeTabId];
+					const isAlreadyActive =
+						activeWorkspaceRef.current?.id === workspaceId &&
+						focusedPaneId === paneId;
+
+					if (isAlreadyActive) {
+						// User is watching - go straight to idle
+						state.setPaneStatus(paneId, "idle");
+					} else {
+						// User not watching - mark for review
+						state.setPaneStatus(paneId, "review");
+					}
 				}
 			} else if (event.type === NOTIFICATION_EVENTS.FOCUS_TAB) {
 				const appState = useAppStore.getState();
