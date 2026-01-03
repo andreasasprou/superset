@@ -4,7 +4,12 @@ import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import { trpcTabsStorage } from "../../lib/trpc-storage";
 import { movePaneToNewTab, movePaneToTab } from "./actions/move-pane";
-import type { AddFileViewerPaneOptions, TabsState, TabsStore } from "./types";
+import type {
+	AddFileViewerPaneOptions,
+	PaneStatus,
+	TabsState,
+	TabsStore,
+} from "./types";
 import {
 	type CreatePaneOptions,
 	createFileViewerPane,
@@ -199,14 +204,22 @@ export const useTabsStore = create<TabsStore>()(
 						];
 					}
 
-					// Clear needsAttention for the focused pane in the tab being activated
-					const focusedPaneId = state.focusedPaneIds[tabId];
+					// Clear attention status for panes in the selected tab
+					const tabPaneIds = extractPaneIdsFromLayout(tab.layout);
 					const newPanes = { ...state.panes };
-					if (focusedPaneId && newPanes[focusedPaneId]?.needsAttention) {
-						newPanes[focusedPaneId] = {
-							...newPanes[focusedPaneId],
-							needsAttention: false,
-						};
+					let hasChanges = false;
+					for (const paneId of tabPaneIds) {
+						const currentStatus = newPanes[paneId]?.status;
+						if (currentStatus === "review") {
+							// User acknowledged completion
+							newPanes[paneId] = { ...newPanes[paneId], status: "idle" };
+							hasChanges = true;
+						} else if (currentStatus === "permission") {
+							// Assume permission granted, agent is now working
+							newPanes[paneId] = { ...newPanes[paneId], status: "working" };
+							hasChanges = true;
+						}
+						// "working" status is NOT cleared by click - persists until Stop
 					}
 
 					set({
@@ -218,7 +231,7 @@ export const useTabsStore = create<TabsStore>()(
 							...state.tabHistoryStacks,
 							[workspaceId]: newHistoryStack,
 						},
-						panes: newPanes,
+						...(hasChanges ? { panes: newPanes } : {}),
 					});
 				},
 
@@ -506,20 +519,11 @@ export const useTabsStore = create<TabsStore>()(
 					const pane = state.panes[paneId];
 					if (!pane || pane.tabId !== tabId) return;
 
-					// Clear needsAttention for the pane being focused
-					const newPanes = pane.needsAttention
-						? {
-								...state.panes,
-								[paneId]: { ...pane, needsAttention: false },
-							}
-						: state.panes;
-
 					set({
 						focusedPaneIds: {
 							...state.focusedPaneIds,
 							[tabId]: paneId,
 						},
-						panes: newPanes,
 					});
 				},
 
@@ -534,18 +538,18 @@ export const useTabsStore = create<TabsStore>()(
 					}));
 				},
 
-				setNeedsAttention: (paneId, needsAttention) => {
+				setPaneStatus: (paneId, status) => {
 					set((state) => ({
 						panes: {
 							...state.panes,
 							[paneId]: state.panes[paneId]
-								? { ...state.panes[paneId], needsAttention }
+								? { ...state.panes[paneId], status }
 								: state.panes[paneId],
 						},
 					}));
 				},
 
-				clearWorkspaceAttention: (workspaceId) => {
+				clearWorkspaceAttentionStatus: (workspaceId) => {
 					const state = get();
 					const workspaceTabs = state.tabs.filter(
 						(t) => t.workspaceId === workspaceId,
@@ -561,10 +565,17 @@ export const useTabsStore = create<TabsStore>()(
 					const newPanes = { ...state.panes };
 					let hasChanges = false;
 					for (const paneId of workspacePaneIds) {
-						if (newPanes[paneId]?.needsAttention) {
-							newPanes[paneId] = { ...newPanes[paneId], needsAttention: false };
+						const currentStatus = newPanes[paneId]?.status;
+						if (currentStatus === "review") {
+							// User acknowledged completion
+							newPanes[paneId] = { ...newPanes[paneId], status: "idle" };
+							hasChanges = true;
+						} else if (currentStatus === "permission") {
+							// Assume permission granted, Claude is now working
+							newPanes[paneId] = { ...newPanes[paneId], status: "working" };
 							hasChanges = true;
 						}
+						// "working" status is NOT cleared by click - persists until Stop
 					}
 
 					if (hasChanges) {
@@ -776,7 +787,35 @@ export const useTabsStore = create<TabsStore>()(
 			}),
 			{
 				name: "tabs-storage",
+				version: 2,
 				storage: trpcTabsStorage,
+				migrate: (persistedState, version) => {
+					const state = persistedState as TabsState;
+					if (version < 2 && state.panes) {
+						// Migrate needsAttention → status
+						for (const pane of Object.values(state.panes)) {
+							// biome-ignore lint/suspicious/noExplicitAny: migration from old schema
+							const legacyPane = pane as any;
+							if (legacyPane.needsAttention === true) {
+								pane.status = "review";
+							}
+							delete legacyPane.needsAttention;
+						}
+					}
+					return state;
+				},
+				merge: (persistedState, currentState) => {
+					const persisted = persistedState as TabsState;
+					// Clear stale "working" status on startup - agent can't be working if app just started
+					if (persisted.panes) {
+						for (const pane of Object.values(persisted.panes)) {
+							if (pane.status === "working") {
+								pane.status = "idle";
+							}
+						}
+					}
+					return { ...currentState, ...persisted };
+				},
 			},
 		),
 		{ name: "TabsStore" },

@@ -31,9 +31,15 @@ export function TabItem({ tab, index, isActive }: TabItemProps) {
 	const setActiveTab = useTabsStore((s) => s.setActiveTab);
 	const renameTab = useTabsStore((s) => s.renameTab);
 	const panes = useTabsStore((s) => s.panes);
-	const needsAttention = useTabsStore((s) =>
-		Object.values(s.panes).some((p) => p.tabId === tab.id && p.needsAttention),
-	);
+
+	// Derive aggregate status from panes in this tab (priority: permission > working > review)
+	const aggregateStatus = useTabsStore((s) => {
+		const tabPanes = Object.values(s.panes).filter((p) => p.tabId === tab.id);
+		if (tabPanes.some((p) => p.status === "permission")) return "permission";
+		if (tabPanes.some((p) => p.status === "working")) return "working";
+		if (tabPanes.some((p) => p.status === "review")) return "review";
+		return null;
+	});
 
 	const paneCount = useMemo(
 		() => Object.values(panes).filter((p) => p.tabId === tab.id).length,
@@ -190,15 +196,34 @@ export function TabItem({ tab, index, isActive }: TabItemProps) {
 						<HiMiniCommandLine className="size-4" />
 						<div className="flex items-center gap-1 flex-1 min-w-0">
 							<span className="truncate flex-1">{displayName}</span>
-							{needsAttention && (
+							{aggregateStatus && (
 								<Tooltip>
 									<TooltipTrigger asChild>
 										<span className="relative flex size-2 shrink-0 ml-1">
-											<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-											<span className="relative inline-flex size-2 rounded-full bg-red-500" />
+											{aggregateStatus === "permission" && (
+												<>
+													<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+													<span className="relative inline-flex size-2 rounded-full bg-red-500" />
+												</>
+											)}
+											{aggregateStatus === "working" && (
+												<>
+													<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+													<span className="relative inline-flex size-2 rounded-full bg-amber-500" />
+												</>
+											)}
+											{aggregateStatus === "review" && (
+												<span className="relative inline-flex size-2 rounded-full bg-green-500" />
+											)}
 										</span>
 									</TooltipTrigger>
-									<TooltipContent side="right">Agent completed</TooltipContent>
+									<TooltipContent side="right">
+										{aggregateStatus === "permission"
+											? "Needs input"
+											: aggregateStatus === "working"
+												? "Agent working"
+												: "Ready for review"}
+									</TooltipContent>
 								</Tooltip>
 							)}
 						</div>
