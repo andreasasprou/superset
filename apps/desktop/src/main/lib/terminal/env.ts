@@ -261,12 +261,18 @@ function hasAllowedPrefix(key: string, isWindows: boolean): boolean {
 
 /**
  * Build a safe environment by only including allowlisted variables.
- * This prevents secrets and app-specific config from leaking to terminals.
+ * This prevents Superset app secrets and build-time config from leaking to terminals.
+ *
+ * Threat model: Prevent app secrets (DATABASE_URL, API keys from .env) from leaking.
+ * User shell config vars (proxy, tool paths) are intentionally allowed so terminals
+ * behave like the user's normal environment.
  *
  * Allowlist approach rationale:
- * - Secrets can't leak (unknown vars excluded by default)
+ * - Unknown vars excluded by default (prevents app secrets like DATABASE_URL from leaking)
  * - Only infrastructure vars (PATH, HOME, etc.) pass through from Electron
  * - Shell initialization vars (ZDOTDIR, BASH_ENV) are added separately via shellEnv
+ *
+ * Note: Allowlisted vars like HTTP_PROXY may contain user-configured credentials.
  *
  * @param env - The environment variables to filter
  * @param options - Optional configuration
