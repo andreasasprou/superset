@@ -4,6 +4,7 @@ import { cn } from "@superset/ui/utils";
 import { useMemo } from "react";
 import { HiMiniPlus, HiMiniXMark } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
+import { StatusIndicator } from "renderer/screens/main/components/StatusIndicator";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import type { PaneStatus, Tab } from "renderer/stores/tabs/types";
 import { getTabDisplayName } from "renderer/stores/tabs/utils";
@@ -42,25 +43,7 @@ function GroupItem({
 						<span className="text-sm whitespace-nowrap overflow-hidden flex-1 text-left">
 							{displayName}
 						</span>
-						{status && status !== "idle" && (
-							<span className="relative flex size-2 shrink-0">
-								{status === "permission" && (
-									<>
-										<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-										<span className="relative inline-flex size-2 rounded-full bg-red-500" />
-									</>
-								)}
-								{status === "working" && (
-									<>
-										<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
-										<span className="relative inline-flex size-2 rounded-full bg-amber-500" />
-									</>
-								)}
-								{status === "review" && (
-									<span className="relative inline-flex size-2 rounded-full bg-green-500" />
-								)}
-							</span>
-						)}
+						{status && status !== "idle" && <StatusIndicator status={status} />}
 					</button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom" sideOffset={4}>

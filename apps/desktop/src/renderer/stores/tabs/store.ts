@@ -4,12 +4,7 @@ import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import { trpcTabsStorage } from "../../lib/trpc-storage";
 import { movePaneToNewTab, movePaneToTab } from "./actions/move-pane";
-import type {
-	AddFileViewerPaneOptions,
-	PaneStatus,
-	TabsState,
-	TabsStore,
-} from "./types";
+import type { AddFileViewerPaneOptions, TabsState, TabsStore } from "./types";
 import {
 	type CreatePaneOptions,
 	createFileViewerPane,

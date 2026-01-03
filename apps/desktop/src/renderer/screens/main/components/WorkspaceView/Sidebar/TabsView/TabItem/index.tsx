@@ -5,6 +5,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { HiMiniCommandLine, HiMiniXMark } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
+import {
+	getStatusTooltip,
+	StatusIndicator,
+} from "renderer/screens/main/components/StatusIndicator";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import type { Tab } from "renderer/stores/tabs/types";
 import { getTabDisplayName } from "renderer/stores/tabs/utils";
@@ -199,30 +203,13 @@ export function TabItem({ tab, index, isActive }: TabItemProps) {
 							{aggregateStatus && (
 								<Tooltip>
 									<TooltipTrigger asChild>
-										<span className="relative flex size-2 shrink-0 ml-1">
-											{aggregateStatus === "permission" && (
-												<>
-													<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-													<span className="relative inline-flex size-2 rounded-full bg-red-500" />
-												</>
-											)}
-											{aggregateStatus === "working" && (
-												<>
-													<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
-													<span className="relative inline-flex size-2 rounded-full bg-amber-500" />
-												</>
-											)}
-											{aggregateStatus === "review" && (
-												<span className="relative inline-flex size-2 rounded-full bg-green-500" />
-											)}
-										</span>
+										<StatusIndicator
+											status={aggregateStatus}
+											className="ml-1"
+										/>
 									</TooltipTrigger>
 									<TooltipContent side="right">
-										{aggregateStatus === "permission"
-											? "Needs input"
-											: aggregateStatus === "working"
-												? "Agent working"
-												: "Ready for review"}
+										{getStatusTooltip(aggregateStatus)}
 									</TooltipContent>
 								</Tooltip>
 							)}
