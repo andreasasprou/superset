@@ -179,6 +179,51 @@ const ALLOWED_ENV_VARS = new Set([
 	"TEMP",
 	"TMP",
 	"PATHEXT", // Required for command resolution on Windows
+
+	// SSL/TLS configuration (custom certs, not secrets)
+	"SSL_CERT_FILE",
+	"SSL_CERT_DIR",
+	"NODE_EXTRA_CA_CERTS",
+	"REQUESTS_CA_BUNDLE", // Python requests library
+
+	// Git configuration (not credentials)
+	"GIT_SSH_COMMAND",
+	"GIT_AUTHOR_NAME",
+	"GIT_AUTHOR_EMAIL",
+	"GIT_COMMITTER_NAME",
+	"GIT_COMMITTER_EMAIL",
+	"GIT_EDITOR",
+	"GIT_PAGER",
+
+	// AWS configuration (profile selection, not credentials)
+	// Actual secrets are in ~/.aws/credentials, not env vars
+	"AWS_PROFILE",
+	"AWS_DEFAULT_REGION",
+	"AWS_REGION",
+	"AWS_CONFIG_FILE",
+	"AWS_SHARED_CREDENTIALS_FILE",
+
+	// Docker configuration (not credentials)
+	"DOCKER_HOST",
+	"DOCKER_CONFIG",
+	"DOCKER_CERT_PATH",
+	"DOCKER_TLS_VERIFY",
+	"COMPOSE_PROJECT_NAME",
+
+	// Kubernetes configuration (not credentials)
+	"KUBECONFIG",
+	"KUBE_CONFIG_PATH",
+
+	// Cloud CLI tools (not credentials)
+	"CLOUDSDK_CONFIG", // Google Cloud SDK
+	"AZURE_CONFIG_DIR", // Azure CLI
+
+	// SDK paths (not secrets)
+	"JAVA_HOME",
+	"ANDROID_HOME",
+	"ANDROID_SDK_ROOT",
+	"FLUTTER_ROOT",
+	"DOTNET_ROOT",
 ]);
 
 /**

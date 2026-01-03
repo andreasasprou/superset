@@ -350,6 +350,79 @@ describe("env", () => {
 			});
 		});
 
+		describe("includes developer tool config vars (non-secrets)", () => {
+			it("should include SSL/TLS config vars", () => {
+				const env = {
+					SSL_CERT_FILE: "/etc/ssl/certs/ca-certificates.crt",
+					SSL_CERT_DIR: "/etc/ssl/certs",
+					NODE_EXTRA_CA_CERTS: "/path/to/custom-ca.crt",
+					PATH: "/usr/bin",
+				};
+				const result = buildSafeEnv(env);
+				expect(result.SSL_CERT_FILE).toBe("/etc/ssl/certs/ca-certificates.crt");
+				expect(result.SSL_CERT_DIR).toBe("/etc/ssl/certs");
+				expect(result.NODE_EXTRA_CA_CERTS).toBe("/path/to/custom-ca.crt");
+			});
+
+			it("should include Git config vars (not credentials)", () => {
+				const env = {
+					GIT_SSH_COMMAND: "ssh -i ~/.ssh/custom_key",
+					GIT_AUTHOR_NAME: "Test User",
+					GIT_AUTHOR_EMAIL: "test@example.com",
+					GIT_EDITOR: "vim",
+					PATH: "/usr/bin",
+				};
+				const result = buildSafeEnv(env);
+				expect(result.GIT_SSH_COMMAND).toBe("ssh -i ~/.ssh/custom_key");
+				expect(result.GIT_AUTHOR_NAME).toBe("Test User");
+				expect(result.GIT_AUTHOR_EMAIL).toBe("test@example.com");
+				expect(result.GIT_EDITOR).toBe("vim");
+			});
+
+			it("should include AWS profile config (not credentials)", () => {
+				const env = {
+					AWS_PROFILE: "production",
+					AWS_DEFAULT_REGION: "us-east-1",
+					AWS_REGION: "us-west-2",
+					PATH: "/usr/bin",
+				};
+				const result = buildSafeEnv(env);
+				expect(result.AWS_PROFILE).toBe("production");
+				expect(result.AWS_DEFAULT_REGION).toBe("us-east-1");
+				expect(result.AWS_REGION).toBe("us-west-2");
+			});
+
+			it("should include Docker/K8s config vars", () => {
+				const env = {
+					DOCKER_HOST: "unix:///var/run/docker.sock",
+					DOCKER_CONFIG: "/home/user/.docker",
+					KUBECONFIG: "/home/user/.kube/config",
+					PATH: "/usr/bin",
+				};
+				const result = buildSafeEnv(env);
+				expect(result.DOCKER_HOST).toBe("unix:///var/run/docker.sock");
+				expect(result.DOCKER_CONFIG).toBe("/home/user/.docker");
+				expect(result.KUBECONFIG).toBe("/home/user/.kube/config");
+			});
+
+			it("should include SDK path vars", () => {
+				const env = {
+					JAVA_HOME: "/usr/lib/jvm/java-17",
+					ANDROID_HOME: "/home/user/Android/Sdk",
+					ANDROID_SDK_ROOT: "/home/user/Android/Sdk",
+					FLUTTER_ROOT: "/home/user/flutter",
+					DOTNET_ROOT: "/usr/share/dotnet",
+					PATH: "/usr/bin",
+				};
+				const result = buildSafeEnv(env);
+				expect(result.JAVA_HOME).toBe("/usr/lib/jvm/java-17");
+				expect(result.ANDROID_HOME).toBe("/home/user/Android/Sdk");
+				expect(result.ANDROID_SDK_ROOT).toBe("/home/user/Android/Sdk");
+				expect(result.FLUTTER_ROOT).toBe("/home/user/flutter");
+				expect(result.DOTNET_ROOT).toBe("/usr/share/dotnet");
+			});
+		});
+
 		describe("includes SUPERSET_* prefix vars", () => {
 			it("should include SUPERSET_* vars (our metadata)", () => {
 				const env = {
