@@ -35,7 +35,14 @@ Before proceeding, review the diff against the relevant standards and best pract
 - `AGENTS.md` (root) - cross-app conventions, coding standards, architecture principles
 - `apps/desktop/AGENTS.md` - desktop-specific guidance (if desktop work)
 
-Create an internal checklist from AGENTS.md and review code against it.
+Create an internal checklist and review code against it.
+
+**Key standards to verify:**
+- Object signatures for 2+ parameters
+- No `as any`, `@ts-ignore`, or empty catch blocks
+- No Node.js imports in renderer/shared code (desktop)
+- No `middleware.ts` in Next.js apps (use `proxy.ts` instead - Next.js 16)
+- tRPC routers use proper error codes
 
 ### If discrepancies are found: STOP and report
 
