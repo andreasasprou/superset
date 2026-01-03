@@ -24,6 +24,7 @@ import {
 	useSetActiveWorkspace,
 	useWorkspaceDeleteHandler,
 } from "renderer/react-query/workspaces";
+import { StatusIndicator } from "renderer/screens/main/components/StatusIndicator";
 import { BranchSwitcher } from "renderer/screens/main/components/TopBar/WorkspaceTabs/BranchSwitcher";
 import { DeleteWorkspaceDialog } from "renderer/screens/main/components/TopBar/WorkspaceTabs/DeleteWorkspaceDialog";
 import { useWorkspaceRename } from "renderer/screens/main/components/TopBar/WorkspaceTabs/useWorkspaceRename";
@@ -227,25 +228,7 @@ export function WorkspaceListItem({
 							{pr && (
 								<WorkspaceStatusBadge state={pr.state} prNumber={pr.number} />
 							)}
-							{aggregateStatus && (
-								<span className="relative flex size-2 shrink-0">
-									{aggregateStatus === "permission" && (
-										<>
-											<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-											<span className="relative inline-flex size-2 rounded-full bg-red-500" />
-										</>
-									)}
-									{aggregateStatus === "working" && (
-										<>
-											<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
-											<span className="relative inline-flex size-2 rounded-full bg-amber-500" />
-										</>
-									)}
-									{aggregateStatus === "review" && (
-										<span className="relative inline-flex size-2 rounded-full bg-green-500" />
-									)}
-								</span>
-							)}
+							{aggregateStatus && <StatusIndicator status={aggregateStatus} />}
 						</div>
 						{name !== branch && !isBranchWorkspace && (
 							<div className="text-xs text-muted-foreground truncate font-mono">
