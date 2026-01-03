@@ -5,13 +5,13 @@ import { useMemo } from "react";
 import { HiMiniPlus, HiMiniXMark } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
 import { useTabsStore } from "renderer/stores/tabs/store";
-import type { Tab } from "renderer/stores/tabs/types";
+import type { PaneStatus, Tab } from "renderer/stores/tabs/types";
 import { getTabDisplayName } from "renderer/stores/tabs/utils";
 
 interface GroupItemProps {
 	tab: Tab;
 	isActive: boolean;
-	needsAttention: boolean;
+	status: PaneStatus | null;
 	onSelect: () => void;
 	onClose: () => void;
 }
@@ -19,7 +19,7 @@ interface GroupItemProps {
 function GroupItem({
 	tab,
 	isActive,
-	needsAttention,
+	status,
 	onSelect,
 	onClose,
 }: GroupItemProps) {
@@ -42,10 +42,23 @@ function GroupItem({
 						<span className="text-sm whitespace-nowrap overflow-hidden flex-1 text-left">
 							{displayName}
 						</span>
-						{needsAttention && (
+						{status && status !== "idle" && (
 							<span className="relative flex size-2 shrink-0">
-								<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-								<span className="relative inline-flex size-2 rounded-full bg-red-500" />
+								{status === "permission" && (
+									<>
+										<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+										<span className="relative inline-flex size-2 rounded-full bg-red-500" />
+									</>
+								)}
+								{status === "working" && (
+									<>
+										<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+										<span className="relative inline-flex size-2 rounded-full bg-amber-500" />
+									</>
+								)}
+								{status === "review" && (
+									<span className="relative inline-flex size-2 rounded-full bg-green-500" />
+								)}
 							</span>
 						)}
 					</button>
@@ -104,12 +117,24 @@ export function GroupStrip() {
 		? activeTabIds[activeWorkspaceId]
 		: null;
 
-	// Check which tabs have panes that need attention
-	const tabsWithAttention = useMemo(() => {
-		const result = new Set<string>();
+	// Compute aggregate status per tab (priority: permission > working > review)
+	const tabStatusMap = useMemo(() => {
+		const result = new Map<string, PaneStatus>();
 		for (const pane of Object.values(panes)) {
-			if (pane.needsAttention) {
-				result.add(pane.tabId);
+			if (!pane.status || pane.status === "idle") continue;
+
+			const currentStatus = result.get(pane.tabId);
+			// Priority: permission > working > review
+			if (pane.status === "permission") {
+				result.set(pane.tabId, "permission");
+			} else if (pane.status === "working" && currentStatus !== "permission") {
+				result.set(pane.tabId, "working");
+			} else if (
+				pane.status === "review" &&
+				currentStatus !== "permission" &&
+				currentStatus !== "working"
+			) {
+				result.set(pane.tabId, "review");
 			}
 		}
 		return result;
@@ -144,7 +169,7 @@ export function GroupStrip() {
 							<GroupItem
 								tab={tab}
 								isActive={tab.id === activeTabId}
-								needsAttention={tabsWithAttention.has(tab.id)}
+								status={tabStatusMap.get(tab.id) ?? null}
 								onSelect={() => handleSelectGroup(tab.id)}
 								onClose={() => handleCloseGroup(tab.id)}
 							/>

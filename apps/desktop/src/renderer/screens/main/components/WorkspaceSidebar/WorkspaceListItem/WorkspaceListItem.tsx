@@ -73,8 +73,8 @@ export function WorkspaceListItem({
 	const rename = useWorkspaceRename(id, name);
 	const tabs = useTabsStore((s) => s.tabs);
 	const panes = useTabsStore((s) => s.panes);
-	const clearWorkspaceAttention = useTabsStore(
-		(s) => s.clearWorkspaceAttention,
+	const clearWorkspaceAttentionStatus = useTabsStore(
+		(s) => s.clearWorkspaceAttentionStatus,
 	);
 	const utils = trpc.useUtils();
 	const openInFinder = trpc.external.openInFinder.useMutation();
@@ -97,22 +97,35 @@ export function WorkspaceListItem({
 		},
 	);
 
-	// Check if any pane in tabs belonging to this workspace needs attention (agent notifications)
+	// Derive aggregate status from panes in this workspace
+	// Priority: permission (red) > working (amber) > review (green)
 	const workspaceTabs = tabs.filter((t) => t.workspaceId === id);
 	const workspacePaneIds = new Set(
 		workspaceTabs.flatMap((t) => extractPaneIdsFromLayout(t.layout)),
 	);
-	const hasPaneAttention = Object.values(panes)
-		.filter((p) => workspacePaneIds.has(p.id))
-		.some((p) => p.needsAttention);
+	const workspacePanes = Object.values(panes).filter((p) =>
+		workspacePaneIds.has(p.id),
+	);
 
-	// Show indicator if workspace is manually marked as unread OR has pane-level attention
-	const needsAttention = isUnread || hasPaneAttention;
+	const hasPermission = workspacePanes.some((p) => p.status === "permission");
+	const hasWorking = workspacePanes.some((p) => p.status === "working");
+	const hasReview = workspacePanes.some((p) => p.status === "review");
+
+	// Aggregate status for the workspace (priority order)
+	const aggregateStatus = hasPermission
+		? "permission"
+		: hasWorking
+			? "working"
+			: hasReview
+				? "review"
+				: isUnread
+					? "review" // isUnread maps to review color
+					: null;
 
 	const handleClick = () => {
 		if (!rename.isRenaming) {
 			setActiveWorkspace.mutate({ id });
-			clearWorkspaceAttention(id);
+			clearWorkspaceAttentionStatus(id);
 		}
 	};
 
@@ -214,10 +227,23 @@ export function WorkspaceListItem({
 							{pr && (
 								<WorkspaceStatusBadge state={pr.state} prNumber={pr.number} />
 							)}
-							{needsAttention && (
+							{aggregateStatus && (
 								<span className="relative flex size-2 shrink-0">
-									<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-									<span className="relative inline-flex size-2 rounded-full bg-red-500" />
+									{aggregateStatus === "permission" && (
+										<>
+											<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+											<span className="relative inline-flex size-2 rounded-full bg-red-500" />
+										</>
+									)}
+									{aggregateStatus === "working" && (
+										<>
+											<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+											<span className="relative inline-flex size-2 rounded-full bg-amber-500" />
+										</>
+									)}
+									{aggregateStatus === "review" && (
+										<span className="relative inline-flex size-2 rounded-full bg-green-500" />
+									)}
 								</span>
 							)}
 						</div>
