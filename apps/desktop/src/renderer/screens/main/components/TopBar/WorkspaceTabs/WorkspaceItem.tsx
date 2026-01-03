@@ -10,6 +10,7 @@ import {
 	useSetActiveWorkspace,
 	useWorkspaceDeleteHandler,
 } from "renderer/react-query/workspaces";
+import { StatusIndicator } from "renderer/screens/main/components/StatusIndicator";
 import { useCloseSettings } from "renderer/stores/app-state";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import { extractPaneIdsFromLayout } from "renderer/stores/tabs/utils";
@@ -222,23 +223,7 @@ export function WorkspaceItem({
 									{title}
 								</span>
 								{aggregateStatus && (
-									<span className="relative flex size-2 shrink-0">
-										{aggregateStatus === "permission" && (
-											<>
-												<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-												<span className="relative inline-flex size-2 rounded-full bg-red-500" />
-											</>
-										)}
-										{aggregateStatus === "working" && (
-											<>
-												<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
-												<span className="relative inline-flex size-2 rounded-full bg-amber-500" />
-											</>
-										)}
-										{aggregateStatus === "review" && (
-											<span className="relative inline-flex size-2 rounded-full bg-green-500" />
-										)}
-									</span>
+									<StatusIndicator status={aggregateStatus} />
 								)}
 							</>
 						)}
