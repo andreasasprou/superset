@@ -30,9 +30,11 @@ import {
 	hasUncommittedChanges,
 	hasUnpushedCommits,
 	listBranches,
+	refExistsLocally,
 	refreshDefaultBranch,
 	removeWorktree,
 	safeCheckoutBranch,
+	sanitizeGitError,
 	worktreeExists,
 } from "./utils/git";
 import { fetchGitHubPRStatus } from "./utils/github";
@@ -128,6 +130,27 @@ async function initializeWorkspaceWorktree({
 		);
 		const hasRemote = await hasOriginRemote(mainRepoPath);
 
+		// Helper to resolve local ref with proper fallback order
+		const resolveLocalStartPoint = async (
+			reason: string,
+		): Promise<string | null> => {
+			// Fallback order: origin/<branch> (local tracking) > local branch > fail
+			const originRef = `origin/${effectiveBaseBranch}`;
+			if (await refExistsLocally(mainRepoPath, originRef)) {
+				console.log(
+					`[workspace-init] ${reason}. Using local tracking ref: ${originRef}`,
+				);
+				return originRef;
+			}
+			if (await refExistsLocally(mainRepoPath, effectiveBaseBranch)) {
+				console.log(
+					`[workspace-init] ${reason}. Using local branch: ${effectiveBaseBranch}`,
+				);
+				return effectiveBaseBranch;
+			}
+			return null;
+		};
+
 		let startPoint: string;
 		if (hasRemote) {
 			const branchCheck = await branchExistsOnRemote(
@@ -136,12 +159,31 @@ async function initializeWorkspaceWorktree({
 			);
 
 			if (branchCheck.status === "error") {
-				// Network/auth error - can't verify, but allow proceeding with local ref
+				// Network/auth error - can't verify, surface to user and try local fallback
+				const sanitizedError = sanitizeGitError(branchCheck.message);
 				console.warn(
-					`[workspace-init] Cannot verify remote branch: ${branchCheck.message}. Falling back to local ref.`,
+					`[workspace-init] Cannot verify remote branch: ${sanitizedError}. Falling back to local ref.`,
 				);
-				// Try to use local tracking branch if available
-				startPoint = effectiveBaseBranch;
+
+				// Update progress to inform user about the network issue
+				manager.updateProgress(
+					workspaceId,
+					"verifying",
+					"Using local reference (remote unavailable)",
+					sanitizedError,
+				);
+
+				const localRef = await resolveLocalStartPoint("Remote unavailable");
+				if (!localRef) {
+					manager.updateProgress(
+						workspaceId,
+						"failed",
+						"No local reference available",
+						`Cannot reach remote and no local ref for "${effectiveBaseBranch}" exists. Please check your network connection and try again.`,
+					);
+					return;
+				}
+				startPoint = localRef;
 			} else if (branchCheck.status === "not_found") {
 				manager.updateProgress(
 					workspaceId,
@@ -151,11 +193,22 @@ async function initializeWorkspaceWorktree({
 				);
 				return;
 			} else {
-				// Branch exists on remote
+				// Branch exists on remote - use remote tracking ref
 				startPoint = `origin/${effectiveBaseBranch}`;
 			}
 		} else {
-			startPoint = effectiveBaseBranch;
+			// No remote configured - use local fallback logic
+			const localRef = await resolveLocalStartPoint("No remote configured");
+			if (!localRef) {
+				manager.updateProgress(
+					workspaceId,
+					"failed",
+					"No local reference available",
+					`No remote configured and no local ref for "${effectiveBaseBranch}" exists.`,
+				);
+				return;
+			}
+			startPoint = localRef;
 		}
 
 		if (manager.isCancellationRequested(workspaceId)) {
@@ -880,7 +933,8 @@ export const createWorkspacesRouter = () => {
 					? {
 							branch: worktree.branch,
 							baseBranch,
-							gitStatus: worktree.gitStatus,
+							// Normalize to null to ensure consistent "incomplete init" detection in UI
+							gitStatus: worktree.gitStatus ?? null,
 						}
 					: null,
 			};
