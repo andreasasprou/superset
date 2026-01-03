@@ -709,6 +709,42 @@ export async function checkoutBranch(
  * @param branch - Branch to checkout
  * @throws Error if safety checks fail or checkout fails
  */
+/**
+ * Checks if a git ref exists locally (without network access).
+ * Uses --verify --quiet to only check exit code without output.
+ * @param repoPath - Path to the repository
+ * @param ref - The ref to check (e.g., "main", "origin/main")
+ * @returns true if the ref exists locally, false otherwise
+ */
+export async function refExistsLocally(
+	repoPath: string,
+	ref: string,
+): Promise<boolean> {
+	const git = simpleGit(repoPath);
+	try {
+		// Use --verify --quiet to check if ref exists without output
+		// Append ^{commit} to ensure it resolves to a commit-ish
+		await git.raw(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Sanitizes git error messages for user display.
+ * Strips "fatal:" prefixes, excessive newlines, and other git plumbing text.
+ * @param message - Raw git error message
+ * @returns Cleaned message suitable for UI display
+ */
+export function sanitizeGitError(message: string): string {
+	return message
+		.replace(/^fatal:\s*/i, "")
+		.replace(/^error:\s*/i, "")
+		.replace(/\n+/g, " ")
+		.trim();
+}
+
 export async function safeCheckoutBranch(
 	repoPath: string,
 	branch: string,

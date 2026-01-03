@@ -21,11 +21,13 @@ export function WorkspaceView() {
 	const hasFailed = useHasWorkspaceFailed(activeWorkspaceId ?? "");
 
 	// Also check for incomplete init after app restart:
-	// - worktree type workspace with null gitStatus means init never completed
+	// - worktree type workspace with null/undefined gitStatus means init never completed
 	// - This handles the case where app restarts during init (in-memory progress lost)
+	// - Uses explicit check instead of == null to avoid lint issues
+	const gitStatus = activeWorkspace?.worktree?.gitStatus;
 	const hasIncompleteInit =
 		activeWorkspace?.type === "worktree" &&
-		activeWorkspace?.worktree?.gitStatus === null;
+		(gitStatus === null || gitStatus === undefined);
 
 	const showInitView =
 		activeWorkspaceId && (isInitializing || hasFailed || hasIncompleteInit);
