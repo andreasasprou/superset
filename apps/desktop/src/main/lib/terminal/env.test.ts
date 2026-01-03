@@ -381,6 +381,71 @@ describe("env", () => {
 			const result = buildSafeEnv(env);
 			expect(Object.keys(result).length).toBe(0);
 		});
+
+		describe("Windows platform case-insensitivity", () => {
+			it("should include Path (Windows casing) when platform is win32", () => {
+				const env = { Path: "C:\\Windows\\System32", HOME: "/home/user" };
+				const result = buildSafeEnv(env, { platform: "win32" });
+				expect(result.Path).toBe("C:\\Windows\\System32");
+			});
+
+			it("should NOT include Path on non-Windows (case-sensitive)", () => {
+				const env = { Path: "C:\\Windows\\System32", HOME: "/home/user" };
+				const result = buildSafeEnv(env, { platform: "darwin" });
+				expect(result.Path).toBeUndefined();
+				expect(result.HOME).toBe("/home/user");
+			});
+
+			it("should include SystemRoot (Windows casing) when platform is win32", () => {
+				const env = { SystemRoot: "C:\\Windows", PATH: "/usr/bin" };
+				const result = buildSafeEnv(env, { platform: "win32" });
+				expect(result.SystemRoot).toBe("C:\\Windows");
+			});
+
+			it("should include TEMP and TMP on Windows", () => {
+				const env = {
+					Temp: "C:\\Users\\test\\AppData\\Local\\Temp",
+					TMP: "C:\\Users\\test\\AppData\\Local\\Temp",
+					PATH: "/usr/bin",
+				};
+				const result = buildSafeEnv(env, { platform: "win32" });
+				expect(result.Temp).toBe("C:\\Users\\test\\AppData\\Local\\Temp");
+				expect(result.TMP).toBe("C:\\Users\\test\\AppData\\Local\\Temp");
+			});
+
+			it("should include PATHEXT on Windows", () => {
+				const env = {
+					PATHEXT: ".COM;.EXE;.BAT;.CMD",
+					PATH: "/usr/bin",
+				};
+				const result = buildSafeEnv(env, { platform: "win32" });
+				expect(result.PATHEXT).toBe(".COM;.EXE;.BAT;.CMD");
+			});
+
+			it("should include Superset_* prefix vars case-insensitively on Windows", () => {
+				const env = {
+					Superset_Pane_Id: "pane-1",
+					SUPERSET_TAB_ID: "tab-1",
+					PATH: "/usr/bin",
+				};
+				const result = buildSafeEnv(env, { platform: "win32" });
+				expect(result.Superset_Pane_Id).toBe("pane-1");
+				expect(result.SUPERSET_TAB_ID).toBe("tab-1");
+			});
+
+			it("should preserve original key casing in output", () => {
+				const env = {
+					Path: "C:\\Windows\\System32",
+					systemroot: "C:\\Windows",
+					HOME: "/home/user",
+				};
+				const result = buildSafeEnv(env, { platform: "win32" });
+				// Keys should preserve their original casing
+				expect(result.Path).toBe("C:\\Windows\\System32");
+				expect(result.systemroot).toBe("C:\\Windows");
+				expect(result.HOME).toBe("/home/user");
+			});
+		});
 	});
 
 	describe("removeAppEnvVars (deprecated wrapper)", () => {

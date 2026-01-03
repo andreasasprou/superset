@@ -64,8 +64,12 @@ export function sanitizeEnv(
 }
 
 /**
- * Allowlist of exact environment variable names safe to pass to terminals.
+ * Allowlist of environment variable names safe to pass to terminals.
  * Using an allowlist (vs denylist) ensures unknown vars (including secrets) are excluded by default.
+ *
+ * IMPORTANT: On Windows, env var keys are case-insensitive. The system may store
+ * "Path" instead of "PATH", "SystemRoot" instead of "SYSTEMROOT", etc.
+ * We store uppercase versions here and do case-insensitive matching on Windows.
  */
 const ALLOWED_ENV_VARS = new Set([
 	// Core shell environment
@@ -99,6 +103,7 @@ const ALLOWED_ENV_VARS = new Set([
 	"SSH_AGENT_PID",
 
 	// Proxy configuration (user may need for network access)
+	// Note: proxy vars are case-sensitive on Unix, so we include both cases
 	"HTTP_PROXY",
 	"HTTPS_PROXY",
 	"http_proxy",
@@ -161,13 +166,19 @@ const ALLOWED_ENV_VARS = new Set([
 	"Apple_PubSub_Socket_Render",
 
 	// Windows specific (for cross-platform compatibility)
+	// Note: Windows stores these with various casings (Path, SystemRoot, etc.)
+	// but we match case-insensitively on win32
 	"COMSPEC",
 	"USERPROFILE",
 	"APPDATA",
 	"LOCALAPPDATA",
 	"PROGRAMFILES",
+	"PROGRAMFILES(X86)",
 	"SYSTEMROOT",
 	"WINDIR",
+	"TEMP",
+	"TMP",
+	"PATHEXT", // Required for command resolution on Windows
 ]);
 
 /**
@@ -180,28 +191,59 @@ const ALLOWED_PREFIXES = [
 ];
 
 /**
+ * Check if a key is in the allowlist, handling Windows case-insensitivity.
+ * @param key - The environment variable key
+ * @param isWindows - Whether running on Windows (for case-insensitive matching)
+ */
+function isAllowedVar(key: string, isWindows: boolean): boolean {
+	// On Windows, env vars are case-insensitive
+	// The system may store "Path" instead of "PATH"
+	if (isWindows) {
+		return ALLOWED_ENV_VARS.has(key.toUpperCase());
+	}
+	return ALLOWED_ENV_VARS.has(key);
+}
+
+/**
+ * Check if a key matches an allowed prefix, handling Windows case-insensitivity.
+ * @param key - The environment variable key
+ * @param isWindows - Whether running on Windows (for case-insensitive matching)
+ */
+function hasAllowedPrefix(key: string, isWindows: boolean): boolean {
+	const keyToCheck = isWindows ? key.toUpperCase() : key;
+	return ALLOWED_PREFIXES.some((prefix) => keyToCheck.startsWith(prefix));
+}
+
+/**
  * Build a safe environment by only including allowlisted variables.
  * This prevents secrets and app-specific config from leaking to terminals.
  *
  * Allowlist approach rationale:
  * - Secrets can't leak (unknown vars excluded by default)
- * - User's legitimate shell env is preserved via shellEnv (loaded separately)
  * - Only infrastructure vars (PATH, HOME, etc.) pass through from Electron
+ * - Shell initialization vars (ZDOTDIR, BASH_ENV) are added separately via shellEnv
+ *
+ * @param env - The environment variables to filter
+ * @param options - Optional configuration
+ * @param options.platform - Override platform detection (for testing)
  */
 export function buildSafeEnv(
 	env: Record<string, string>,
+	options?: { platform?: NodeJS.Platform },
 ): Record<string, string> {
+	const platform = options?.platform ?? os.platform();
+	const isWindows = platform === "win32";
 	const safe: Record<string, string> = {};
 
 	for (const [key, value] of Object.entries(env)) {
-		// Check exact match first
-		if (ALLOWED_ENV_VARS.has(key)) {
+		// Check exact match (case-insensitive on Windows)
+		if (isAllowedVar(key, isWindows)) {
 			safe[key] = value;
 			continue;
 		}
 
-		// Check prefix match
-		if (ALLOWED_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+		// Check prefix match (case-insensitive on Windows)
+		if (hasAllowedPrefix(key, isWindows)) {
 			safe[key] = value;
 		}
 	}
