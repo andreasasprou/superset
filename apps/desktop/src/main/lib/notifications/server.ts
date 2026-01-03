@@ -71,22 +71,32 @@ export function mapEventType(
 /**
  * Resolves paneId from tabId or workspaceId using synced tabs state.
  * Falls back to focused pane in active tab.
+ *
+ * If a paneId is provided but doesn't exist in state (stale reference),
+ * we fall through to tabId/workspaceId resolution instead of returning
+ * an invalid paneId that would corrupt the store.
  */
 function resolvePaneId(
 	paneId: string | undefined,
 	tabId: string | undefined,
 	workspaceId: string | undefined,
 ): string | undefined {
-	if (paneId) return paneId;
-
 	try {
 		const tabsState = appState.data.tabsState;
 		if (!tabsState) return undefined;
 
+		// If paneId provided, validate it exists before returning
+		if (paneId && tabsState.panes?.[paneId]) {
+			return paneId;
+		}
+		// If paneId was provided but doesn't exist, fall through to resolution
+
 		// Try to resolve from tabId
 		if (tabId) {
 			const focusedPaneId = tabsState.focusedPaneIds?.[tabId];
-			if (focusedPaneId) return focusedPaneId;
+			if (focusedPaneId && tabsState.panes?.[focusedPaneId]) {
+				return focusedPaneId;
+			}
 		}
 
 		// Try to resolve from workspaceId
@@ -94,7 +104,9 @@ function resolvePaneId(
 			const activeTabId = tabsState.activeTabIds?.[workspaceId];
 			if (activeTabId) {
 				const focusedPaneId = tabsState.focusedPaneIds?.[activeTabId];
-				if (focusedPaneId) return focusedPaneId;
+				if (focusedPaneId && tabsState.panes?.[focusedPaneId]) {
+					return focusedPaneId;
+				}
 			}
 		}
 	} catch {
