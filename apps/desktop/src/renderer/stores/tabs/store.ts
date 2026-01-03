@@ -528,25 +528,29 @@ export const useTabsStore = create<TabsStore>()(
 				},
 
 				markPaneAsUsed: (paneId) => {
-					set((state) => ({
-						panes: {
-							...state.panes,
-							[paneId]: state.panes[paneId]
-								? { ...state.panes[paneId], isNew: false }
-								: state.panes[paneId],
-						},
-					}));
+					set((state) => {
+						// Guard: no-op for unknown panes to avoid corrupting panes map
+						if (!state.panes[paneId]) return state;
+						return {
+							panes: {
+								...state.panes,
+								[paneId]: { ...state.panes[paneId], isNew: false },
+							},
+						};
+					});
 				},
 
 				setPaneStatus: (paneId, status) => {
-					set((state) => ({
+					const state = get();
+					// Guard: no-op for unknown panes to avoid corrupting panes map with undefined
+					if (!state.panes[paneId]) return;
+
+					set({
 						panes: {
 							...state.panes,
-							[paneId]: state.panes[paneId]
-								? { ...state.panes[paneId], status }
-								: state.panes[paneId],
+							[paneId]: { ...state.panes[paneId], status },
 						},
-					}));
+					});
 				},
 
 				clearWorkspaceAttentionStatus: (workspaceId) => {
@@ -584,29 +588,37 @@ export const useTabsStore = create<TabsStore>()(
 				},
 
 				updatePaneCwd: (paneId, cwd, confirmed) => {
-					set((state) => ({
-						panes: {
-							...state.panes,
-							[paneId]: state.panes[paneId]
-								? { ...state.panes[paneId], cwd, cwdConfirmed: confirmed }
-								: state.panes[paneId],
-						},
-					}));
+					set((state) => {
+						// Guard: no-op for unknown panes to avoid corrupting panes map
+						if (!state.panes[paneId]) return state;
+						return {
+							panes: {
+								...state.panes,
+								[paneId]: {
+									...state.panes[paneId],
+									cwd,
+									cwdConfirmed: confirmed,
+								},
+							},
+						};
+					});
 				},
 
 				clearPaneInitialData: (paneId) => {
-					set((state) => ({
-						panes: {
-							...state.panes,
-							[paneId]: state.panes[paneId]
-								? {
-										...state.panes[paneId],
-										initialCommands: undefined,
-										initialCwd: undefined,
-									}
-								: state.panes[paneId],
-						},
-					}));
+					set((state) => {
+						// Guard: no-op for unknown panes to avoid corrupting panes map
+						if (!state.panes[paneId]) return state;
+						return {
+							panes: {
+								...state.panes,
+								[paneId]: {
+									...state.panes[paneId],
+									initialCommands: undefined,
+									initialCwd: undefined,
+								},
+							},
+						};
+					});
 				},
 
 				// Split operations
