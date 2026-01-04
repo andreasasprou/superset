@@ -7,8 +7,8 @@ import { useTabsStore } from "./store";
 import { resolveNotificationTarget } from "./utils/resolve-notification-target";
 
 /**
- * Hook that listens for agent lifecycle events via tRPC subscription and updates
- * pane status indicators accordingly.
+ * Hook that listens for notification events via tRPC subscription.
+ * Handles agent lifecycle events, focus requests, and plan submissions.
  *
  * STATUS MAPPING:
  * - Start → "working" (amber pulsing indicator)
@@ -44,6 +44,37 @@ export function useAgentHookListener() {
 			if (!event.data) return;
 
 			const state = useTabsStore.getState();
+
+			// Handle plan submission events
+			if (event.type === NOTIFICATION_EVENTS.PLAN_SUBMITTED) {
+				const {
+					content,
+					planId,
+					originPaneId,
+					summary,
+					agentType,
+					workspaceId,
+				} = event.data;
+
+				// Find the workspace to add the plan pane to
+				// First try from the event data, then fall back to active workspace
+				const targetWorkspaceId = workspaceId || activeWorkspaceRef.current?.id;
+
+				if (!targetWorkspaceId) {
+					console.warn("[useAgentHookListener] No workspace found for plan");
+					return;
+				}
+
+				state.addPlanViewerPane(targetWorkspaceId, {
+					content,
+					planId,
+					originPaneId,
+					summary,
+					agentType,
+				});
+				return;
+			}
+
 			const target = resolveNotificationTarget(event.data, state);
 			if (!target) return;
 

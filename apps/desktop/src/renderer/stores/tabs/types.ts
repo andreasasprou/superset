@@ -50,6 +50,17 @@ export interface AddFileViewerPaneOptions {
 }
 
 /**
+ * Options for adding a plan-viewer pane
+ */
+export interface AddPlanViewerPaneOptions {
+	content: string;
+	planId: string;
+	originPaneId: string;
+	summary?: string;
+	agentType?: "opencode" | "claude";
+}
+
+/**
  * Actions available on the tabs store
  */
 export interface TabsStore extends TabsState {
@@ -75,6 +86,10 @@ export interface TabsStore extends TabsState {
 	addFileViewerPane: (
 		workspaceId: string,
 		options: AddFileViewerPaneOptions,
+	) => string;
+	addPlanViewerPane: (
+		workspaceId: string,
+		options: AddPlanViewerPaneOptions,
 	) => string;
 	removePane: (paneId: string) => void;
 	setFocusedPane: (tabId: string, paneId: string) => void;

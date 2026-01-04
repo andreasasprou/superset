@@ -3,6 +3,7 @@ import express from "express";
 import { NOTIFICATION_EVENTS } from "shared/constants";
 import { env } from "shared/env.shared";
 import { appState } from "../app-state";
+import { validateAndReadPlanFile } from "../plans";
 import { HOOK_PROTOCOL_VERSION } from "../terminal/env";
 
 /**
@@ -20,6 +21,15 @@ export interface NotificationIds {
 
 export interface AgentLifecycleEvent extends NotificationIds {
 	eventType: "Start" | "Stop" | "PermissionRequest";
+}
+
+export interface PlanSubmittedEvent {
+	content: string;
+	planId: string;
+	originPaneId: string;
+	summary?: string;
+	agentType: "opencode" | "claude";
+	workspaceId?: string;
 }
 
 export const notificationsEmitter = new EventEmitter();
@@ -172,6 +182,39 @@ app.get("/hook/complete", (req, res) => {
 	notificationsEmitter.emit(NOTIFICATION_EVENTS.AGENT_LIFECYCLE, event);
 
 	res.json({ success: true, paneId: resolvedPaneId, tabId });
+});
+
+// Plan submission hook
+app.post("/hook/plan", async (req, res) => {
+	const { planId, planPath, summary, originPaneId, agentType, workspaceId } =
+		req.body;
+
+	if (!planPath || !planId) {
+		res.status(400).json({ error: "Missing planPath or planId" });
+		return;
+	}
+
+	// Validate and read plan file securely
+	const result = await validateAndReadPlanFile(planPath);
+
+	if (!result.ok) {
+		console.warn(`[notifications] Invalid plan file: ${result.error}`);
+		res.status(400).json({ error: result.error });
+		return;
+	}
+
+	const event: PlanSubmittedEvent = {
+		content: result.content,
+		planId,
+		originPaneId: originPaneId || "",
+		summary,
+		agentType: agentType === "claude" ? "claude" : "opencode",
+		workspaceId,
+	};
+
+	notificationsEmitter.emit(NOTIFICATION_EVENTS.PLAN_SUBMITTED, event);
+
+	res.json({ success: true, planId });
 });
 
 // Health check
