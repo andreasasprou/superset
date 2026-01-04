@@ -11,6 +11,7 @@ import {
 	HoverCardTrigger,
 } from "@superset/ui/hover-card";
 import type { ReactNode } from "react";
+import { LuEye, LuEyeOff } from "react-icons/lu";
 import { trpc } from "renderer/lib/trpc";
 import { WorkspaceHoverCardContent } from "./WorkspaceHoverCard";
 
@@ -19,6 +20,7 @@ interface WorkspaceItemContextMenuProps {
 	workspaceId: string;
 	worktreePath: string;
 	workspaceAlias?: string;
+	isUnread?: boolean;
 	onRename: () => void;
 	canRename?: boolean;
 	showHoverCard?: boolean;
@@ -29,17 +31,46 @@ export function WorkspaceItemContextMenu({
 	workspaceId,
 	worktreePath,
 	workspaceAlias,
+	isUnread = false,
 	onRename,
 	canRename = true,
 	showHoverCard = true,
 }: WorkspaceItemContextMenuProps) {
+	const utils = trpc.useUtils();
 	const openInFinder = trpc.external.openInFinder.useMutation();
+	const setUnread = trpc.workspaces.setUnread.useMutation({
+		onSuccess: () => {
+			// Invalidate both queries that return isUnread state
+			utils.workspaces.getAllGrouped.invalidate();
+			utils.workspaces.getActive.invalidate();
+		},
+	});
 
 	const handleOpenInFinder = () => {
 		if (worktreePath) {
 			openInFinder.mutate(worktreePath);
 		}
 	};
+
+	const handleToggleUnread = () => {
+		setUnread.mutate({ id: workspaceId, isUnread: !isUnread });
+	};
+
+	const unreadMenuItem = (
+		<ContextMenuItem onSelect={handleToggleUnread}>
+			{isUnread ? (
+				<>
+					<LuEye className="size-4 mr-2" />
+					Mark as Read
+				</>
+			) : (
+				<>
+					<LuEyeOff className="size-4 mr-2" />
+					Mark as Unread
+				</>
+			)}
+		</ContextMenuItem>
+	);
 
 	// For branch workspaces, just show context menu without hover card
 	if (!showHoverCard) {
@@ -56,6 +87,8 @@ export function WorkspaceItemContextMenu({
 					<ContextMenuItem onSelect={handleOpenInFinder}>
 						Open in Finder
 					</ContextMenuItem>
+					<ContextMenuSeparator />
+					{unreadMenuItem}
 				</ContextMenuContent>
 			</ContextMenu>
 		);
@@ -77,6 +110,8 @@ export function WorkspaceItemContextMenu({
 					<ContextMenuItem onSelect={handleOpenInFinder}>
 						Open in Finder
 					</ContextMenuItem>
+					<ContextMenuSeparator />
+					{unreadMenuItem}
 				</ContextMenuContent>
 			</ContextMenu>
 			<HoverCardContent side="bottom" align="start" className="w-72">

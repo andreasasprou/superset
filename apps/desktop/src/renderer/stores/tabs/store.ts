@@ -4,9 +4,10 @@ import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import { trpcTabsStorage } from "../../lib/trpc-storage";
 import { movePaneToNewTab, movePaneToTab } from "./actions/move-pane";
-import type { TabsState, TabsStore } from "./types";
+import type { AddFileViewerPaneOptions, TabsState, TabsStore } from "./types";
 import {
 	type CreatePaneOptions,
+	createFileViewerPane,
 	createPane,
 	createTabWithPane,
 	extractPaneIdsFromLayout,
@@ -125,7 +126,11 @@ export const useTabsStore = create<TabsStore>()(
 
 					const paneIds = getPaneIdsForTab(state.panes, tabId);
 					for (const paneId of paneIds) {
-						killTerminalForPane(paneId);
+						// Only kill terminal sessions for terminal panes (avoids unnecessary IPC for file-viewers)
+						const pane = state.panes[paneId];
+						if (pane?.type === "terminal") {
+							killTerminalForPane(paneId);
+						}
 					}
 
 					const newPanes = { ...state.panes };
@@ -194,14 +199,22 @@ export const useTabsStore = create<TabsStore>()(
 						];
 					}
 
-					// Clear needsAttention for the focused pane in the tab being activated
-					const focusedPaneId = state.focusedPaneIds[tabId];
+					// Clear attention status for panes in the selected tab
+					const tabPaneIds = extractPaneIdsFromLayout(tab.layout);
 					const newPanes = { ...state.panes };
-					if (focusedPaneId && newPanes[focusedPaneId]?.needsAttention) {
-						newPanes[focusedPaneId] = {
-							...newPanes[focusedPaneId],
-							needsAttention: false,
-						};
+					let hasChanges = false;
+					for (const paneId of tabPaneIds) {
+						const currentStatus = newPanes[paneId]?.status;
+						if (currentStatus === "review") {
+							// User acknowledged completion
+							newPanes[paneId] = { ...newPanes[paneId], status: "idle" };
+							hasChanges = true;
+						} else if (currentStatus === "permission") {
+							// Assume permission granted, agent is now working
+							newPanes[paneId] = { ...newPanes[paneId], status: "working" };
+							hasChanges = true;
+						}
+						// "working" status is NOT cleared by click - persists until Stop
 					}
 
 					set({
@@ -213,7 +226,7 @@ export const useTabsStore = create<TabsStore>()(
 							...state.tabHistoryStacks,
 							[workspaceId]: newHistoryStack,
 						},
-						panes: newPanes,
+						...(hasChanges ? { panes: newPanes } : {}),
 					});
 				},
 
@@ -285,7 +298,10 @@ export const useTabsStore = create<TabsStore>()(
 
 					const newPanes = { ...state.panes };
 					for (const paneId of removedPaneIds) {
-						killTerminalForPane(paneId);
+						// P2: Only kill terminal for actual terminal panes (avoid unnecessary IPC)
+						if (state.panes[paneId]?.type === "terminal") {
+							killTerminalForPane(paneId);
+						}
 						delete newPanes[paneId];
 					}
 
@@ -340,6 +356,112 @@ export const useTabsStore = create<TabsStore>()(
 					return newPane.id;
 				},
 
+				addFileViewerPane: (
+					workspaceId: string,
+					options: AddFileViewerPaneOptions,
+				) => {
+					const state = get();
+					const activeTabId = state.activeTabIds[workspaceId];
+					const activeTab = state.tabs.find((t) => t.id === activeTabId);
+
+					// If no active tab, create a new one (this shouldn't normally happen)
+					if (!activeTab) {
+						const { tabId, paneId } = get().addTab(workspaceId);
+						// Update the pane to be a file-viewer (must use set() to get fresh state after addTab)
+						const fileViewerPane = createFileViewerPane(tabId, options);
+						set((s) => ({
+							panes: {
+								...s.panes,
+								[paneId]: {
+									...fileViewerPane,
+									id: paneId, // Keep the original ID
+								},
+							},
+						}));
+						return paneId;
+					}
+
+					// Look for an existing unlocked file-viewer pane in the active tab
+					const tabPaneIds = extractPaneIdsFromLayout(activeTab.layout);
+					const fileViewerPanes = tabPaneIds
+						.map((id) => state.panes[id])
+						.filter(
+							(p) =>
+								p?.type === "file-viewer" &&
+								p.fileViewer &&
+								!p.fileViewer.isLocked,
+						);
+
+					// If we found an unlocked file-viewer pane, reuse it
+					if (fileViewerPanes.length > 0) {
+						const paneToReuse = fileViewerPanes[0];
+						const fileName =
+							options.filePath.split("/").pop() || options.filePath;
+
+						// Determine default view mode
+						let viewMode: "raw" | "rendered" | "diff" = "raw";
+						if (options.diffCategory) {
+							viewMode = "diff";
+						} else if (
+							options.filePath.endsWith(".md") ||
+							options.filePath.endsWith(".markdown") ||
+							options.filePath.endsWith(".mdx")
+						) {
+							viewMode = "rendered";
+						}
+
+						set({
+							panes: {
+								...state.panes,
+								[paneToReuse.id]: {
+									...paneToReuse,
+									name: fileName,
+									fileViewer: {
+										filePath: options.filePath,
+										viewMode,
+										isLocked: false,
+										diffLayout: "inline",
+										diffCategory: options.diffCategory,
+										commitHash: options.commitHash,
+										oldPath: options.oldPath,
+										initialLine: options.line,
+										initialColumn: options.column,
+									},
+								},
+							},
+							focusedPaneIds: {
+								...state.focusedPaneIds,
+								[activeTab.id]: paneToReuse.id,
+							},
+						});
+
+						return paneToReuse.id;
+					}
+
+					// No reusable pane found, create a new one
+					const newPane = createFileViewerPane(activeTab.id, options);
+
+					const newLayout: MosaicNode<string> = {
+						direction: "row",
+						first: activeTab.layout,
+						second: newPane.id,
+						splitPercentage: 50,
+					};
+
+					set({
+						tabs: state.tabs.map((t) =>
+							t.id === activeTab.id ? { ...t, layout: newLayout } : t,
+						),
+						panes: { ...state.panes, [newPane.id]: newPane },
+						focusedPaneIds: {
+							...state.focusedPaneIds,
+							[activeTab.id]: newPane.id,
+						},
+					});
+
+					return newPane.id;
+				},
+
 				removePane: (paneId) => {
 					const state = get();
 					const pane = state.panes[paneId];
@@ -354,7 +476,10 @@ export const useTabsStore = create<TabsStore>()(
 						return;
 					}
 
-					killTerminalForPane(paneId);
+					// Only kill terminal sessions for terminal panes (avoids unnecessary IPC for file-viewers)
+					if (pane.type === "terminal") {
+						killTerminalForPane(paneId);
+					}
 
 					const newLayout = removePaneFromLayout(tab.layout, paneId);
 					if (!newLayout) {
@@ -389,69 +514,106 @@ export const useTabsStore = create<TabsStore>()(
 					const pane = state.panes[paneId];
 					if (!pane || pane.tabId !== tabId) return;
 
-					// Clear needsAttention for the pane being focused
-					const newPanes = pane.needsAttention
-						? {
-								...state.panes,
-								[paneId]: { ...pane, needsAttention: false },
-							}
-						: state.panes;
-
 					set({
 						focusedPaneIds: {
 							...state.focusedPaneIds,
 							[tabId]: paneId,
 						},
-						panes: newPanes,
 					});
 				},
 
 				markPaneAsUsed: (paneId) => {
-					set((state) => ({
-						panes: {
-							...state.panes,
-							[paneId]: state.panes[paneId]
-								? { ...state.panes[paneId], isNew: false }
-								: state.panes[paneId],
-						},
-					}));
+					set((state) => {
+						// Guard: no-op for unknown panes to avoid corrupting panes map
+						if (!state.panes[paneId]) return state;
+						return {
+							panes: {
+								...state.panes,
+								[paneId]: { ...state.panes[paneId], isNew: false },
+							},
+						};
+					});
 				},
 
-				setNeedsAttention: (paneId, needsAttention) => {
-					set((state) => ({
+				setPaneStatus: (paneId, status) => {
+					const state = get();
+					// Guard: no-op for unknown panes to avoid corrupting panes map with undefined
+					if (!state.panes[paneId]) return;
+
+					set({
 						panes: {
 							...state.panes,
-							[paneId]: state.panes[paneId]
-								? { ...state.panes[paneId], needsAttention }
-								: state.panes[paneId],
+							[paneId]: { ...state.panes[paneId], status },
 						},
-					}));
+					});
+				},
+
+				clearWorkspaceAttentionStatus: (workspaceId) => {
+					const state = get();
+					const workspaceTabs = state.tabs.filter(
+						(t) => t.workspaceId === workspaceId,
+					);
+					const workspacePaneIds = workspaceTabs.flatMap((t) =>
+						extractPaneIdsFromLayout(t.layout),
+					);
+
+					if (workspacePaneIds.length === 0) {
+						return;
+					}
+
+					const newPanes = { ...state.panes };
+					let hasChanges = false;
+					for (const paneId of workspacePaneIds) {
+						const currentStatus = newPanes[paneId]?.status;
+						if (currentStatus === "review") {
+							// User acknowledged completion
+							newPanes[paneId] = { ...newPanes[paneId], status: "idle" };
+							hasChanges = true;
+						} else if (currentStatus === "permission") {
+							// Assume permission granted, Claude is now working
+							newPanes[paneId] = { ...newPanes[paneId], status: "working" };
+							hasChanges = true;
+						}
+						// "working" status is NOT cleared by click - persists until Stop
+					}
+
+					if (hasChanges) {
+						set({ panes: newPanes });
+					}
 				},
 
 				updatePaneCwd: (paneId, cwd, confirmed) => {
-					set((state) => ({
-						panes: {
-							...state.panes,
-							[paneId]: state.panes[paneId]
-								? { ...state.panes[paneId], cwd, cwdConfirmed: confirmed }
-								: state.panes[paneId],
-						},
-					}));
+					set((state) => {
+						// Guard: no-op for unknown panes to avoid corrupting panes map
+						if (!state.panes[paneId]) return state;
+						return {
+							panes: {
+								...state.panes,
+								[paneId]: {
+									...state.panes[paneId],
+									cwd,
+									cwdConfirmed: confirmed,
+								},
+							},
+						};
+					});
 				},
 
 				clearPaneInitialData: (paneId) => {
-					set((state) => ({
-						panes: {
-							...state.panes,
-							[paneId]: state.panes[paneId]
-								? {
-										...state.panes[paneId],
-										initialCommands: undefined,
-										initialCwd: undefined,
-									}
-								: state.panes[paneId],
-						},
-					}));
+					set((state) => {
+						// Guard: no-op for unknown panes to avoid corrupting panes map
+						if (!state.panes[paneId]) return state;
+						return {
+							panes: {
+								...state.panes,
+								[paneId]: {
+									...state.panes[paneId],
+									initialCommands: undefined,
+									initialCwd: undefined,
+								},
+							},
+						};
+					});
 				},
 
 				// Split operations
@@ -463,7 +625,19 @@ export const useTabsStore = create<TabsStore>()(
 					const sourcePane = state.panes[sourcePaneId];
 					if (!sourcePane || sourcePane.tabId !== tabId) return;
 
-					const newPane = createPane(tabId);
+					// Clone file-viewer panes instead of creating a terminal
+					const newPane =
+						sourcePane.type === "file-viewer" && sourcePane.fileViewer
+							? createFileViewerPane(tabId, {
+									filePath: sourcePane.fileViewer.filePath,
+									viewMode: sourcePane.fileViewer.viewMode,
+									isLocked: true, // Lock the cloned pane
+									diffLayout: sourcePane.fileViewer.diffLayout,
+									diffCategory: sourcePane.fileViewer.diffCategory,
+									commitHash: sourcePane.fileViewer.commitHash,
+									oldPath: sourcePane.fileViewer.oldPath,
+								})
+							: createPane(tabId);
 
 					let newLayout: MosaicNode<string>;
 					if (path && path.length > 0) {
@@ -511,7 +685,19 @@ export const useTabsStore = create<TabsStore>()(
 					const sourcePane = state.panes[sourcePaneId];
 					if (!sourcePane || sourcePane.tabId !== tabId) return;
 
-					const newPane = createPane(tabId);
+					// Clone file-viewer panes instead of creating a terminal
+					const newPane =
+						sourcePane.type === "file-viewer" && sourcePane.fileViewer
+							? createFileViewerPane(tabId, {
+									filePath: sourcePane.fileViewer.filePath,
+									viewMode: sourcePane.fileViewer.viewMode,
+									isLocked: true, // Lock the cloned pane
+									diffLayout: sourcePane.fileViewer.diffLayout,
+									diffCategory: sourcePane.fileViewer.diffCategory,
+									commitHash: sourcePane.fileViewer.commitHash,
+									oldPath: sourcePane.fileViewer.oldPath,
+								})
+							: createPane(tabId);
 
 					let newLayout: MosaicNode<string>;
 					if (path && path.length > 0) {
@@ -608,7 +794,38 @@ export const useTabsStore = create<TabsStore>()(
 			}),
 			{
 				name: "tabs-storage",
+				version: 2,
 				storage: trpcTabsStorage,
+				migrate: (persistedState, version) => {
+					const state = persistedState as TabsState;
+					if (version < 2 && state.panes) {
+						// Migrate needsAttention → status
+						for (const pane of Object.values(state.panes)) {
+							// biome-ignore lint/suspicious/noExplicitAny: migration from old schema
+							const legacyPane = pane as any;
+							if (legacyPane.needsAttention === true) {
+								pane.status = "review";
+							}
+							delete legacyPane.needsAttention;
+						}
+					}
+					return state;
+				},
+				merge: (persistedState, currentState) => {
+					const persisted = persistedState as TabsState;
+					// Clear stale transient statuses on startup:
+					// - "working": Agent can't be working if app just restarted
+					// - "permission": Permission dialog is gone after restart
+					// Note: "review" is intentionally preserved so users see missed completions
+					if (persisted.panes) {
+						for (const pane of Object.values(persisted.panes)) {
+							if (pane.status === "working" || pane.status === "permission") {
+								pane.status = "idle";
+							}
+						}
+					}
+					return { ...currentState, ...persisted };
+				},
 			},
 		),
 		{ name: "TabsStore" },

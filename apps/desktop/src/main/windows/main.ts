@@ -13,11 +13,11 @@ import { appState } from "../lib/app-state";
 import { createApplicationMenu, registerMenuHotkeyUpdates } from "../lib/menu";
 import { playNotificationSound } from "../lib/notification-sound";
 import {
-	type AgentCompleteEvent,
+	type AgentLifecycleEvent,
 	notificationsApp,
 	notificationsEmitter,
 } from "../lib/notifications/server";
-import { terminalManager } from "../lib/terminal";
+import { getActiveTerminalManager } from "../lib/terminal";
 import {
 	getInitialWindowBounds,
 	loadWindowState,
@@ -86,10 +86,13 @@ export async function MainWindow() {
 		},
 	);
 
-	// Handle agent completion notifications
+	// Handle agent lifecycle notifications (Stop = completion, PermissionRequest = needs input)
 	notificationsEmitter.on(
-		NOTIFICATION_EVENTS.AGENT_COMPLETE,
-		(event: AgentCompleteEvent) => {
+		NOTIFICATION_EVENTS.AGENT_LIFECYCLE,
+		(event: AgentLifecycleEvent) => {
+			// Only notify on Stop (completion) and PermissionRequest - not on Start
+			if (event.eventType === "Start") return;
+
 			if (Notification.isSupported()) {
 				const isPermissionRequest = event.eventType === "PermissionRequest";
 
@@ -187,7 +190,7 @@ export async function MainWindow() {
 		server.close();
 		notificationsEmitter.removeAllListeners();
 		// Remove terminal listeners to prevent duplicates when window reopens on macOS
-		terminalManager.detachAllListeners();
+		getActiveTerminalManager().detachAllListeners();
 		// Detach window from IPC handler (handler stays alive for window reopen)
 		ipcHandler?.detachWindow(window);
 		// Clear current window reference
