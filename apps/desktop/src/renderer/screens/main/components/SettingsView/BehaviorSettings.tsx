@@ -143,7 +143,7 @@ export function BehaviorSettings() {
 						</p>
 					</div>
 					<Select
-						value={navigationStyle ?? "top-bar"}
+						value={navigationStyle ?? "sidebar"}
 						onValueChange={handleNavigationStyleChange}
 						disabled={isNavLoading || setNavigationStyle.isPending}
 					>
@@ -171,7 +171,7 @@ export function BehaviorSettings() {
 						</p>
 					</div>
 					<Select
-						value={groupTabsPosition ?? "sidebar"}
+						value={groupTabsPosition ?? "content-header"}
 						onValueChange={handleGroupTabsPositionChange}
 						disabled={isGroupTabsLoading || setGroupTabsPosition.isPending}
 					>
