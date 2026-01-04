@@ -4,7 +4,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
 import { cn } from "@superset/ui/utils";
 import { useDrag, useDrop } from "react-dnd";
 import { HiMiniXMark } from "react-icons/hi2";
-import { LuGitBranch } from "react-icons/lu";
+import { LuGitBranch, LuLoader } from "react-icons/lu";
+import { trpc } from "renderer/lib/trpc";
 import {
 	useReorderWorkspaces,
 	useSetActiveWorkspace,
@@ -14,6 +15,11 @@ import { StatusIndicator } from "renderer/screens/main/components/StatusIndicato
 import { useCloseSettings } from "renderer/stores/app-state";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import { extractPaneIdsFromLayout } from "renderer/stores/tabs/utils";
+import {
+	useHasWorkspaceFailed,
+	useIsWorkspaceInitializing,
+	useWorkspaceInitProgress,
+} from "renderer/stores/workspace-init";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { DELETE_TOOLTIP_DELAY, WORKSPACE_TOOLTIP_DELAY } from "./constants";
 import { DeleteWorkspaceDialog } from "./DeleteWorkspaceDialog";
@@ -65,6 +71,11 @@ export function WorkspaceItem({
 	// Shared delete logic
 	const { showDeleteDialog, setShowDeleteDialog, handleDeleteClick } =
 		useWorkspaceDeleteHandler();
+
+	// Workspace initialization state
+	const isInitializing = useIsWorkspaceInitializing(id);
+	const hasFailed = useHasWorkspaceFailed(id);
+	const initProgress = useWorkspaceInitProgress(id);
 
 	// Derive aggregate status from panes in this workspace
 	// Priority: permission (red) > working (amber) > review (green)
@@ -210,7 +221,11 @@ export function WorkspaceItem({
 							</div>
 						) : (
 							<>
-								<LuGitBranch className="size-3 shrink-0 text-muted-foreground" />
+								{isInitializing ? (
+									<LuLoader className="size-3 shrink-0 text-muted-foreground animate-spin" />
+								) : (
+									<LuGitBranch className="size-3 shrink-0 text-muted-foreground" />
+								)}
 								<span
 									className="text-sm whitespace-nowrap overflow-hidden flex-1 text-left"
 									style={{
@@ -222,14 +237,50 @@ export function WorkspaceItem({
 								>
 									{title}
 								</span>
-								{aggregateStatus && (
+								{/* Show status indicators */}
+								{hasFailed ? (
+									<Tooltip delayDuration={300}>
+										<TooltipTrigger asChild>
+											<span className="relative flex size-2 shrink-0">
+												<span className="relative inline-flex size-2 rounded-full bg-red-500" />
+											</span>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">
+											<p className="text-xs">
+												Initialization failed
+												{initProgress?.error && (
+													<>
+														<br />
+														<span className="text-muted-foreground">
+															{initProgress.error}
+														</span>
+													</>
+												)}
+											</p>
+										</TooltipContent>
+									</Tooltip>
+								) : isInitializing ? (
+									<Tooltip delayDuration={300}>
+										<TooltipTrigger asChild>
+											<span className="relative flex size-2 shrink-0">
+												<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+												<span className="relative inline-flex size-2 rounded-full bg-blue-500" />
+											</span>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">
+											<p className="text-xs">
+												{initProgress?.message ?? "Initializing..."}
+											</p>
+										</TooltipContent>
+									</Tooltip>
+								) : aggregateStatus ? (
 									<StatusIndicator status={aggregateStatus} />
-								)}
+								) : null}
 							</>
 						)}
 					</button>
 
-					{/* Only show close button for worktree workspaces */}
+					{/* Only show close button for worktree workspaces, disabled while initializing */}
 					{!isBranchWorkspace && (
 						<Tooltip delayDuration={DELETE_TOOLTIP_DELAY}>
 							<TooltipTrigger asChild>
@@ -237,13 +288,17 @@ export function WorkspaceItem({
 									type="button"
 									variant="ghost"
 									size="icon"
+									disabled={isInitializing}
 									onClick={(e) => {
 										e.stopPropagation();
-										handleDeleteClick();
+										if (!isInitializing) {
+											handleDeleteClick();
+										}
 									}}
 									className={cn(
 										"mt-1 absolute right-1 top-1/2 -translate-y-1/2 cursor-pointer size-5 group-hover:opacity-100",
 										isActive ? "opacity-90" : "opacity-0",
+										isInitializing && "opacity-30 cursor-not-allowed",
 									)}
 									aria-label="Close or delete workspace"
 								>
@@ -251,7 +306,9 @@ export function WorkspaceItem({
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent side="bottom" showArrow={false}>
-								Close or delete
+								{isInitializing
+									? "Cannot delete while initializing"
+									: "Close or delete"}
 							</TooltipContent>
 						</Tooltip>
 					)}
