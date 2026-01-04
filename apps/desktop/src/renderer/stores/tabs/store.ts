@@ -4,9 +4,15 @@ import { create } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import { trpcTabsStorage } from "../../lib/trpc-storage";
 import { movePaneToNewTab, movePaneToTab } from "./actions/move-pane";
-import type { AddFileViewerPaneOptions, TabsState, TabsStore } from "./types";
+import type {
+	AddFileViewerPaneOptions,
+	Pane,
+	TabsState,
+	TabsStore,
+} from "./types";
 import {
 	type CreatePaneOptions,
+	cleanLayout,
 	createFileViewerPane,
 	createPane,
 	createTabWithPane,
@@ -352,6 +358,15 @@ export const useTabsStore = create<TabsStore>()(
 					workspaceId: string,
 					options: AddFileViewerPaneOptions,
 				) => {
+					// Validate filePath - reject empty/whitespace paths
+					if (!options.filePath?.trim()) {
+						console.error("[tabs/addFileViewerPane] Invalid filePath", {
+							workspaceId,
+							options,
+						});
+						return null;
+					}
+
 					const state = get();
 					const activeTabId = state.activeTabIds[workspaceId];
 					const activeTab = state.tabs.find((t) => t.id === activeTabId);
@@ -608,18 +623,32 @@ export const useTabsStore = create<TabsStore>()(
 					if (!sourcePane || sourcePane.tabId !== tabId) return;
 
 					// Clone file-viewer panes instead of creating a terminal
-					const newPane =
-						sourcePane.type === "file-viewer" && sourcePane.fileViewer
-							? createFileViewerPane(tabId, {
-									filePath: sourcePane.fileViewer.filePath,
-									viewMode: sourcePane.fileViewer.viewMode,
-									isLocked: true, // Lock the cloned pane
-									diffLayout: sourcePane.fileViewer.diffLayout,
-									diffCategory: sourcePane.fileViewer.diffCategory,
-									commitHash: sourcePane.fileViewer.commitHash,
-									oldPath: sourcePane.fileViewer.oldPath,
-								})
-							: createPane(tabId);
+					let newPane: Pane;
+					if (
+						sourcePane.type === "file-viewer" &&
+						sourcePane.fileViewer?.filePath?.trim()
+					) {
+						// Valid file-viewer pane - clone it
+						const { fileViewer } = sourcePane;
+						newPane = createFileViewerPane(tabId, {
+							filePath: fileViewer.filePath,
+							viewMode: fileViewer.viewMode,
+							isLocked: true, // Lock the cloned pane
+							diffLayout: fileViewer.diffLayout,
+							diffCategory: fileViewer.diffCategory,
+							commitHash: fileViewer.commitHash,
+							oldPath: fileViewer.oldPath,
+						});
+					} else if (sourcePane.type === "file-viewer") {
+						// Invalid file-viewer pane - skip split
+						console.warn(
+							"[tabs/splitPaneVertical] Source file-viewer has invalid state, skipping split",
+							{ sourcePaneId },
+						);
+						return;
+					} else {
+						newPane = createPane(tabId);
+					}
 
 					let newLayout: MosaicNode<string>;
 					if (path && path.length > 0) {
@@ -668,18 +697,32 @@ export const useTabsStore = create<TabsStore>()(
 					if (!sourcePane || sourcePane.tabId !== tabId) return;
 
 					// Clone file-viewer panes instead of creating a terminal
-					const newPane =
-						sourcePane.type === "file-viewer" && sourcePane.fileViewer
-							? createFileViewerPane(tabId, {
-									filePath: sourcePane.fileViewer.filePath,
-									viewMode: sourcePane.fileViewer.viewMode,
-									isLocked: true, // Lock the cloned pane
-									diffLayout: sourcePane.fileViewer.diffLayout,
-									diffCategory: sourcePane.fileViewer.diffCategory,
-									commitHash: sourcePane.fileViewer.commitHash,
-									oldPath: sourcePane.fileViewer.oldPath,
-								})
-							: createPane(tabId);
+					let newPane: Pane;
+					if (
+						sourcePane.type === "file-viewer" &&
+						sourcePane.fileViewer?.filePath?.trim()
+					) {
+						// Valid file-viewer pane - clone it
+						const { fileViewer } = sourcePane;
+						newPane = createFileViewerPane(tabId, {
+							filePath: fileViewer.filePath,
+							viewMode: fileViewer.viewMode,
+							isLocked: true, // Lock the cloned pane
+							diffLayout: fileViewer.diffLayout,
+							diffCategory: fileViewer.diffCategory,
+							commitHash: fileViewer.commitHash,
+							oldPath: fileViewer.oldPath,
+						});
+					} else if (sourcePane.type === "file-viewer") {
+						// Invalid file-viewer pane - skip split
+						console.warn(
+							"[tabs/splitPaneHorizontal] Source file-viewer has invalid state, skipping split",
+							{ sourcePaneId },
+						);
+						return;
+					} else {
+						newPane = createPane(tabId);
+					}
 
 					let newLayout: MosaicNode<string>;
 					if (path && path.length > 0) {
@@ -777,6 +820,47 @@ export const useTabsStore = create<TabsStore>()(
 			{
 				name: "tabs-storage",
 				storage: trpcTabsStorage,
+				version: 1,
+				migrate: (persistedState, version) => {
+					const state = persistedState as TabsState;
+
+					if (version === 0) {
+						// Clean up corrupt file-viewer panes (missing filePath)
+						const cleanedPanes: Record<string, (typeof state.panes)[string]> =
+							{};
+						const invalidPaneIds: string[] = [];
+
+						for (const [paneId, pane] of Object.entries(state.panes)) {
+							if (
+								pane.type === "file-viewer" &&
+								!pane.fileViewer?.filePath?.trim()
+							) {
+								console.warn(
+									"[tabs/migrate] Removing corrupt file-viewer pane:",
+									paneId,
+								);
+								invalidPaneIds.push(paneId);
+							} else {
+								cleanedPanes[paneId] = pane;
+							}
+						}
+
+						// Also sanitize layouts to remove dangling pane references
+						const validPaneIds = new Set(Object.keys(cleanedPanes));
+						const cleanedTabs = state.tabs.map((tab) => ({
+							...tab,
+							layout: cleanLayout(tab.layout, validPaneIds) ?? tab.layout,
+						}));
+
+						return {
+							...state,
+							panes: cleanedPanes,
+							tabs: cleanedTabs,
+						};
+					}
+
+					return state;
+				},
 			},
 		),
 		{ name: "TabsStore" },

@@ -342,10 +342,30 @@ export function FileViewerPane({
 		hasAppliedInitialLocationRef.current = true;
 	}, [viewMode, initialLine, initialColumn, isLoadingRaw, rawFileData]);
 
-	// Early return AFTER hooks
-	if (!fileViewer) {
+	// Early return AFTER hooks - handle invalid/corrupt file-viewer state
+	// Use filePath?.trim() to catch empty strings and whitespace-only paths
+	const isValidFileViewer = fileViewer?.filePath?.trim();
+	if (!isValidFileViewer) {
 		return (
-			<MosaicWindow<string> path={path} title="">
+			<MosaicWindow<string>
+				path={path}
+				title=""
+				renderToolbar={() => (
+					<div className="flex h-full w-full items-center justify-between px-2">
+						<span className="text-xs text-muted-foreground">
+							No file selected
+						</span>
+						<button
+							type="button"
+							onClick={() => removePane(paneId)}
+							className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted-foreground/20 hover:text-foreground"
+						>
+							<HiMiniXMark className="size-4" />
+						</button>
+					</div>
+				)}
+				className={isActive ? "mosaic-window-focused" : ""}
+			>
 				<div className="flex items-center justify-center h-full text-muted-foreground">
 					No file viewer state
 				</div>
@@ -442,6 +462,14 @@ export function FileViewerPane({
 				return (
 					<div className="flex items-center justify-center h-full text-muted-foreground">
 						No diff available
+					</div>
+				);
+			}
+			// Handle empty diff (missing file or empty content) - show message instead of grey Monaco
+			if (!diffData.original && !diffData.modified) {
+				return (
+					<div className="flex items-center justify-center h-full text-muted-foreground">
+						Diff content unavailable (missing file or empty)
 					</div>
 				);
 			}
