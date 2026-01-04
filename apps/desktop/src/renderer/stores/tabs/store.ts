@@ -813,10 +813,13 @@ export const useTabsStore = create<TabsStore>()(
 				},
 				merge: (persistedState, currentState) => {
 					const persisted = persistedState as TabsState;
-					// Clear stale "working" status on startup - agent can't be working if app just started
+					// Clear stale transient statuses on startup:
+					// - "working": Agent can't be working if app just restarted
+					// - "permission": Permission dialog is gone after restart
+					// Note: "review" is intentionally preserved so users see missed completions
 					if (persisted.panes) {
 						for (const pane of Object.values(persisted.panes)) {
-							if (pane.status === "working") {
+							if (pane.status === "working" || pane.status === "permission") {
 								pane.status = "idle";
 							}
 						}

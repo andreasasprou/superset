@@ -7,8 +7,29 @@ import { useTabsStore } from "./store";
 import { resolveNotificationTarget } from "./utils/resolve-notification-target";
 
 /**
- * Hook that listens for notification events via tRPC subscription.
- * Handles agent lifecycle events (Start, Stop, PermissionRequest) and focus requests.
+ * Hook that listens for agent lifecycle events via tRPC subscription and updates
+ * pane status indicators accordingly.
+ *
+ * STATUS MAPPING:
+ * - Start → "working" (amber pulsing indicator)
+ * - Stop → "review" (green static) if pane not active, "idle" if active
+ * - PermissionRequest → "permission" (red pulsing indicator)
+ *
+ * KNOWN LIMITATIONS (External - Claude Code / OpenCode hook systems):
+ *
+ * 1. User Interrupt (Ctrl+C): Claude Code's Stop hook does NOT fire when the user
+ *    interrupts the agent. The "working" indicator will persist until the next
+ *    Start/Stop event or manual click-to-clear.
+ *
+ * 2. Permission Denied: No hook fires when the user denies a permission request.
+ *    The "permission" indicator persists until click-to-clear or next event.
+ *
+ * 3. Tool Failures: No hook fires when a tool execution fails. The status
+ *    continues until the agent stops or a new event arrives.
+ *
+ * These are fundamental limitations of the external hook systems, not bugs in
+ * this implementation. Users can always click on the workspace to clear any
+ * stuck indicator.
  */
 export function useAgentHookListener() {
 	const setActiveWorkspace = useSetActiveWorkspace();
