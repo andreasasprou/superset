@@ -71,18 +71,21 @@ This plan implements **Phase 1**. The architecture is designed to enable future 
 - Send decision back to agent via `originPaneId` → notification system
 - Global feedback textarea for rejection comments
 
+**See detailed implementation plan below.**
+
 ### Phase 3: Text Annotations (Future)
 - Add `annotations: Annotation[]` to `PlanViewerState`
 - Wrap `MarkdownRenderer` with `AnnotatableViewer` using `web-highlighter` library
 - Add `Toolbar` component for annotation actions (delete/comment/replace)
 - Export annotations as structured markdown feedback (like Plannotator)
 
+**See detailed implementation plan below.**
+
 ### Phase 4: Advanced Features (Future)
 - Plan history in workspace sidebar
 - Obsidian export with frontmatter
 - Diff view between plan revisions
 - Shareable URL links via compression
-- Claude Code support
 
 ### How Phase 1 Enables Future Phases
 
@@ -1280,3 +1283,1464 @@ This integration pattern is proven by Plannotator (https://github.com/backnotpro
 - `MarkdownRenderer` for Tufte rendering
 
 The agent integrations use native hook/plugin patterns - no external SDKs needed.
+
+---
+
+# Phase 2: Approve / Request Changes - Detailed Implementation Plan
+
+## Overview
+
+Phase 2 adds the ability to approve or reject plans with feedback. When a user makes a decision, the response is sent back to the waiting agent hook, allowing the agent to either proceed with implementation (approve) or revise the plan (reject with feedback).
+
+## Key Insight: Superset's Advantage Over Plannotator
+
+Plannotator uses an **ephemeral HTTP server** pattern because it runs outside the app - it spawns a Bun server, opens a browser, waits for a decision, then shuts down.
+
+Superset is **already inside Electron** with established communication channels:
+- tRPC for renderer ↔ main process communication
+- `originPaneId` already tracks which terminal submitted the plan
+- Shared file system for IPC with external processes (agent hooks)
+
+**Architecture Decision: Response File Polling**
+
+We use **response files** for agent ↔ Superset communication because:
+- Agent hooks run as external processes (bash scripts, Node tools) - they can't receive tRPC calls
+- Terminal stdin can't reliably reach the hook process (it goes to the shell, not the hook)
+- Response files are simple, cross-platform, and debuggable
+
+```
+PlanViewerPane (UI)
+    → tRPC mutation (plans.submitResponse)
+    → Main process validates & writes response file
+    → Agent hook polls for response file
+    → Hook reads response and returns to agent
+```
+
+## Architecture
+
+### Response Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   APPROVE/REJECT FLOW                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  User clicks "Approve" or "Request Changes" in PlanViewerPane  │
+│         ↓                                                         │
+│  Renderer calls: trpc.plans.submitResponse.mutate({             │
+│    planId, originPaneId, decision, feedback                     │
+│  })                                                              │
+│         ↓                                                         │
+│  Main process:                                                   │
+│    1. Validates planId matches PLAN_ID_PATTERN                  │
+│    2. Checks *.waiting sentinel exists (agent still waiting)    │
+│    3. Writes response atomically (*.tmp → rename to *.response) │
+│    4. Emits PLAN_RESPONSE event (updates UI status)             │
+│         ↓                                                         │
+│  Agent hook (polling in background):                            │
+│    - Detects *.response file                                    │
+│    - Reads and deletes response + waiting sentinel              │
+│    - Returns decision to agent                                  │
+│         ↓                                                         │
+│  Renderer updates PlanViewerPane:                               │
+│    - status: 'approved' | 'rejected'                            │
+│    - Visual indicator (green checkmark / yellow warning)        │
+│    - Buttons disabled after decision                            │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Response File Protocol
+
+**Files involved per plan:**
+- `{planId}.md` - The plan content (written by agent hook)
+- `{planId}.waiting` - Sentinel indicating agent is waiting for response
+- `{planId}.response` - User's decision (written by main process)
+
+**Protocol guarantees:**
+1. **Atomic writes**: Main process writes `*.tmp` then renames to `*.response`
+2. **Idempotency**: `submitResponse` is write-once; rejects duplicate decisions
+3. **Stale detection**: UI checks for `*.waiting` before allowing response
+4. **Cleanup**: All three file types cleaned up after 24h or on decision
+
+### Agent Response Handling
+
+**Claude Code (ExitPlanMode hook):**
+
+The hook blocks and polls for a response file:
+
+```bash
+# In plan-hook.sh
+RESPONSE_FILE="$PLANS_DIR/$PLAN_ID.response"
+WAITING_FILE="$PLANS_DIR/$PLAN_ID.waiting"
+
+# Create waiting sentinel so UI knows we're listening
+echo "$$" > "$WAITING_FILE"
+
+# Wait for response (with timeout)
+TIMEOUT=1800  # 30 minutes
+ELAPSED=0
+
+while [ $ELAPSED -lt $TIMEOUT ]; do
+  if [ -f "$RESPONSE_FILE" ]; then
+    RESPONSE=$(cat "$RESPONSE_FILE")
+    rm -f "$RESPONSE_FILE" "$WAITING_FILE"
+    echo "$RESPONSE"  # Output to Claude
+    exit 0
+  fi
+  sleep 1
+  ELAPSED=$((ELAPSED + 1))
+done
+
+# Cleanup and timeout
+rm -f "$WAITING_FILE"
+
+# IMPORTANT: Timeout behavior is configurable
+# Default: deny (safer - requires explicit approval)
+# Alternative: allow (more permissive - auto-proceed on timeout)
+jq -n '{behavior: "deny", message: "Plan review timed out. Please resubmit for approval."}'
+```
+
+**Timeout Semantics Decision:**
+
+| Behavior | Pros | Cons |
+|----------|------|------|
+| `deny` on timeout | Safer; approval is a real gate | User must actively respond |
+| `allow` on timeout | Convenient; unblocks stuck sessions | Undermines approval as control |
+
+**Recommendation:** Default to `deny` for production use. Consider a user preference for timeout behavior.
+
+**OpenCode (submit_plan tool):**
+
+Similar pattern with waiting sentinel:
+
+```typescript
+async execute({ plan, summary }) {
+  const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const planPath = path.join(plansTmpDir, `${planId}.md`);
+  const waitingPath = path.join(plansTmpDir, `${planId}.waiting`);
+  const responsePath = path.join(plansTmpDir, `${planId}.response`);
+
+  await fs.mkdir(plansTmpDir, { recursive: true });
+
+  // Write plan content
+  await fs.writeFile(planPath, plan, 'utf-8');
+
+  // Create waiting sentinel (stores our PID for debugging)
+  await fs.writeFile(waitingPath, String(process.pid), 'utf-8');
+
+  // Notify Superset
+  await fetch(`http://127.0.0.1:${notificationPort}/hook/plan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      planId, planPath, summary,
+      originPaneId: process.env.SUPERSET_PANE_ID || '',
+      workspaceId: process.env.SUPERSET_WORKSPACE_ID || '',
+      agentType: 'opencode',
+    }),
+  });
+
+  // Wait for response (poll with timeout)
+  const timeout = 30 * 60 * 1000; // 30 minutes
+  const startTime = Date.now();
+
+  try {
+    while (Date.now() - startTime < timeout) {
+      try {
+        const response = await fs.readFile(responsePath, 'utf-8');
+        // Cleanup all files
+        await Promise.all([
+          fs.unlink(responsePath).catch(() => {}),
+          fs.unlink(waitingPath).catch(() => {}),
+        ]);
+
+        const parsed = JSON.parse(response);
+        if (parsed.decision === 'approved') {
+          return 'Plan approved! Proceeding with implementation.';
+        } else {
+          return `Plan needs revision. User feedback:\n\n${parsed.feedback || 'No specific feedback provided.'}`;
+        }
+      } catch {
+        // File doesn't exist yet, keep waiting
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    // Timeout - cleanup and report
+    await fs.unlink(waitingPath).catch(() => {});
+    return 'Plan review timed out. The user did not respond within 30 minutes.';
+  } catch (error) {
+    // Ensure cleanup on any error
+    await fs.unlink(waitingPath).catch(() => {});
+    throw error;
+  }
+}
+```
+
+## Milestones
+
+### Milestone 2.1: Extend PlanViewerState
+
+**In `apps/desktop/src/shared/tabs-types.ts`:**
+
+```typescript
+export interface PlanViewerState {
+  // ... existing fields
+  status: 'pending' | 'approved' | 'rejected';
+  feedback?: string;        // User's feedback when rejecting
+  respondedAt?: number;     // When decision was made
+}
+```
+
+### Milestone 2.2: Create DecisionBar Component
+
+**Create `apps/desktop/src/renderer/.../PlanViewerPane/DecisionBar/DecisionBar.tsx`:**
+
+```typescript
+interface DecisionBarProps {
+  planId: string;
+  originPaneId: string;
+  status: 'pending' | 'approved' | 'rejected';
+  onApprove: () => void;
+  onReject: (feedback: string) => void;
+  isSubmitting: boolean;
+}
+
+export function DecisionBar({
+  planId,
+  originPaneId,
+  status,
+  onApprove,
+  onReject,
+  isSubmitting,
+}: DecisionBarProps) {
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [feedback, setFeedback] = useState('');
+
+  if (status !== 'pending') {
+    // Show status indicator instead of buttons
+    return (
+      <div className="flex items-center gap-2 px-4 py-2 border-t">
+        {status === 'approved' ? (
+          <>
+            <HiCheckCircle className="text-green-500" />
+            <span className="text-sm text-muted-foreground">Plan approved</span>
+          </>
+        ) : (
+          <>
+            <HiExclamationCircle className="text-yellow-500" />
+            <span className="text-sm text-muted-foreground">Changes requested</span>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-t bg-muted/30">
+      {showFeedback ? (
+        <div className="p-3 space-y-2">
+          <Textarea
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            placeholder="Describe what changes you'd like..."
+            className="min-h-[80px]"
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setShowFeedback(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => onReject(feedback)}
+              disabled={!feedback.trim() || isSubmitting}
+            >
+              {isSubmitting ? 'Sending...' : 'Send Feedback'}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-end gap-2 px-3 py-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowFeedback(true)}
+            disabled={isSubmitting}
+          >
+            Request Changes
+          </Button>
+          <Button
+            size="sm"
+            className="bg-green-600 hover:bg-green-500"
+            onClick={onApprove}
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? 'Approving...' : 'Approve'}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+### Milestone 2.3: Create tRPC Router for Plan Responses
+
+**Create `apps/desktop/src/lib/trpc/routers/plans.ts`:**
+
+```typescript
+import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
+import { publicProcedure, router } from '..';
+import { notificationsEmitter } from 'main/lib/notifications/server';
+import { NOTIFICATION_EVENTS } from 'shared/constants';
+import { PLANS_TMP_DIR, PLAN_ID_PATTERN } from 'main/lib/plans';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+
+// Security: Max feedback size to prevent abuse
+const MAX_FEEDBACK_SIZE = 50 * 1024; // 50KB
+
+export const createPlansRouter = () => {
+  return router({
+    submitResponse: publicProcedure
+      .input(z.object({
+        planId: z.string(),
+        originPaneId: z.string(),
+        decision: z.enum(['approved', 'rejected']),
+        feedback: z.string().max(MAX_FEEDBACK_SIZE).optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { planId, originPaneId, decision, feedback } = input;
+
+        // Security: Validate planId format (prevent path traversal)
+        if (!PLAN_ID_PATTERN.test(planId)) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Invalid plan ID format',
+          });
+        }
+
+        const waitingPath = path.join(PLANS_TMP_DIR, `${planId}.waiting`);
+        const responsePath = path.join(PLANS_TMP_DIR, `${planId}.response`);
+        const tmpPath = path.join(PLANS_TMP_DIR, `${planId}.response.${randomUUID()}.tmp`);
+
+        // Check if agent is still waiting
+        try {
+          await fs.access(waitingPath);
+        } catch {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'Agent is no longer waiting for a response',
+          });
+        }
+
+        // Idempotency: Check if response already exists
+        try {
+          await fs.access(responsePath);
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Response already submitted for this plan',
+          });
+        } catch (error) {
+          if ((error as any).code !== 'ENOENT') throw error;
+          // ENOENT is expected - no response yet
+        }
+
+        // Build response for agent
+        const response = decision === 'approved'
+          ? { decision: 'approved', behavior: 'allow' }
+          : { decision: 'rejected', behavior: 'deny', feedback };
+
+        // Atomic write: write to tmp file then rename
+        await fs.writeFile(tmpPath, JSON.stringify(response), 'utf-8');
+        await fs.rename(tmpPath, responsePath);
+
+        // Emit event to update UI
+        notificationsEmitter.emit(NOTIFICATION_EVENTS.PLAN_RESPONSE, {
+          planId,
+          decision,
+          feedback,
+        });
+
+        return { success: true };
+      }),
+  });
+};
+```
+
+### Milestone 2.4: Update Agent Hooks for Response Handling
+
+**Update Claude Code plan hook (`apps/desktop/src/main/lib/agent-setup/agent-wrappers.ts`):**
+
+```bash
+#!/bin/bash
+# Superset plan hook for Claude Code - Phase 2
+# Waits for user decision before returning to Claude
+
+[ -z "$SUPERSET_TAB_ID" ] && { echo '{"behavior":"allow"}'; exit 0; }
+
+INPUT=$(cat)
+PLAN=$(echo "$INPUT" | jq -r '.tool_input.plan // empty')
+
+if [ -n "$PLAN" ] && [ "$PLAN" != "null" ]; then
+  PLAN_ID="plan-$(date +%s)-$RANDOM"
+  PLANS_DIR="${plansTmpDir}"
+  mkdir -p "$PLANS_DIR"
+
+  PLAN_PATH="$PLANS_DIR/$PLAN_ID.md"
+  RESPONSE_PATH="$PLANS_DIR/$PLAN_ID.response"
+
+  echo "$PLAN" > "$PLAN_PATH"
+
+  # Notify Superset
+  curl -sX POST "http://127.0.0.1:${notificationPort}/hook/plan" \
+    -H "Content-Type: application/json" \
+    --connect-timeout 1 --max-time 2 \
+    -d "{
+      \"planId\": \"$PLAN_ID\",
+      \"planPath\": \"$PLAN_PATH\",
+      \"originPaneId\": \"$SUPERSET_PANE_ID\",
+      \"workspaceId\": \"$SUPERSET_WORKSPACE_ID\",
+      \"agentType\": \"claude\"
+    }" > /dev/null 2>&1
+
+  # Wait for user decision (poll response file)
+  TIMEOUT=1800  # 30 minutes
+  ELAPSED=0
+
+  while [ $ELAPSED -lt $TIMEOUT ]; do
+    if [ -f "$RESPONSE_PATH" ]; then
+      RESPONSE=$(cat "$RESPONSE_PATH")
+      rm -f "$RESPONSE_PATH"
+
+      DECISION=$(echo "$RESPONSE" | jq -r '.decision // "approved"')
+      FEEDBACK=$(echo "$RESPONSE" | jq -r '.feedback // empty')
+
+      if [ "$DECISION" = "approved" ]; then
+        echo '{"behavior":"allow"}'
+      else
+        # Include feedback in deny message
+        echo "{\"behavior\":\"deny\",\"message\":\"Plan changes requested:\\n\\n$FEEDBACK\"}"
+      fi
+      exit 0
+    fi
+
+    sleep 1
+    ELAPSED=$((ELAPSED + 1))
+  done
+
+  # Timeout - allow by default
+  echo '{"behavior":"allow"}'
+else
+  echo '{"behavior":"allow"}'
+fi
+```
+
+**Update OpenCode plugin for response handling:**
+
+```typescript
+async execute({ plan, summary }) {
+  const planId = `plan-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const planPath = path.join(plansTmpDir, `${planId}.md`);
+  const responsePath = path.join(plansTmpDir, `${planId}.response`);
+
+  await fs.mkdir(plansTmpDir, { recursive: true });
+  await fs.writeFile(planPath, plan, 'utf-8');
+
+  // Notify Superset
+  await fetch(`http://127.0.0.1:${notificationPort}/hook/plan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      planId,
+      planPath,
+      summary,
+      originPaneId: process.env.SUPERSET_PANE_ID || '',
+      workspaceId: process.env.SUPERSET_WORKSPACE_ID || '',
+      agentType: 'opencode',
+    }),
+  });
+
+  // Wait for response (poll with timeout)
+  const startTime = Date.now();
+  const timeout = 30 * 60 * 1000; // 30 minutes
+
+  while (Date.now() - startTime < timeout) {
+    try {
+      const response = await fs.readFile(responsePath, 'utf-8');
+      await fs.unlink(responsePath);
+
+      const parsed = JSON.parse(response);
+      if (parsed.decision === 'approved') {
+        return 'Plan approved! Proceeding with implementation.';
+      } else {
+        return `Plan needs revision. User feedback:\n\n${parsed.feedback || 'No specific feedback provided.'}`;
+      }
+    } catch {
+      // File doesn't exist yet, keep waiting
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+
+  // Timeout - inform user
+  return 'Plan review timed out. You may proceed with implementation or ask the user for feedback.';
+}
+```
+
+### Milestone 2.5: Update PlanViewerPane with DecisionBar
+
+**Update `PlanViewerPane.tsx`:**
+
+```typescript
+export function PlanViewerPane({ paneId, path, pane, ... }) {
+  const planViewer = pane.planViewer;
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitResponse = trpc.plans.submitResponse.useMutation();
+
+  const handleApprove = async () => {
+    if (!planViewer) return;
+    setIsSubmitting(true);
+    try {
+      await submitResponse.mutateAsync({
+        planId: planViewer.planId,
+        originPaneId: planViewer.originPaneId,
+        decision: 'approved',
+      });
+      // Update local state
+      updatePlanStatus(paneId, 'approved');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReject = async (feedback: string) => {
+    if (!planViewer) return;
+    setIsSubmitting(true);
+    try {
+      await submitResponse.mutateAsync({
+        planId: planViewer.planId,
+        originPaneId: planViewer.originPaneId,
+        decision: 'rejected',
+        feedback,
+      });
+      updatePlanStatus(paneId, 'rejected', feedback);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <MosaicWindow ...>
+      <div className="flex flex-col h-full">
+        <div className="flex-1 overflow-auto p-4">
+          <MarkdownRenderer content={planViewer.content} />
+        </div>
+        <DecisionBar
+          planId={planViewer.planId}
+          originPaneId={planViewer.originPaneId}
+          status={planViewer.status}
+          onApprove={handleApprove}
+          onReject={handleReject}
+          isSubmitting={isSubmitting}
+        />
+      </div>
+    </MosaicWindow>
+  );
+}
+```
+
+### Milestone 2.6: Add PLAN_RESPONSE Event Handling
+
+**Update `apps/desktop/src/shared/constants.ts`:**
+
+```typescript
+export const NOTIFICATION_EVENTS = {
+  AGENT_COMPLETE: 'agent-complete',
+  FOCUS_TAB: 'focus-tab',
+  PLAN_SUBMITTED: 'plan-submitted',
+  PLAN_RESPONSE: 'plan-response',  // NEW
+} as const;
+```
+
+**Update notifications router to emit PLAN_RESPONSE:**
+
+Add handler in `useAgentHookListener.ts` to update plan status when response is sent.
+
+## New Files (Phase 2)
+
+```
+apps/desktop/src/
+├── lib/trpc/routers/plans.ts           # New tRPC router
+├── renderer/.../PlanViewerPane/
+│   ├── DecisionBar/
+│   │   ├── DecisionBar.tsx             # Approve/Reject UI
+│   │   └── index.ts
+│   └── PlanViewerPane.tsx              # Updated with DecisionBar
+```
+
+## Dependencies (Phase 2)
+
+**No new npm dependencies.** Uses existing:
+- `@superset/ui/button` and `@superset/ui/textarea` for UI
+- tRPC patterns already established
+- File-based response mechanism (no additional IPC)
+
+## Security Considerations (Phase 2)
+
+### Path Traversal Prevention
+- **planId validation**: Always validate against `PLAN_ID_PATTERN` before constructing file paths
+- **Canonical paths**: Use `path.resolve()` + `realpath()` when reading plan files
+- **Directory containment**: Ensure all plan files are within `PLANS_TMP_DIR`
+
+### Localhost CSRF Mitigation
+The notifications server currently has permissive CORS (`Access-Control-Allow-Origin: *`). Consider:
+- Adding a per-install secret token validated on POST endpoints
+- Or restricting CORS to Electron's app origin only
+
+### Input Validation
+- **Feedback size limit**: 50KB max to prevent memory abuse
+- **planId format**: Alphanumeric + hyphens only
+- **Idempotency**: Reject duplicate responses to same plan
+
+### File System Safety
+- **Atomic writes**: Prevents partial file reads
+- **Cleanup**: All file types (`.md`, `.waiting`, `.response`, `.tmp`) cleaned after 24h
+- **Permissions**: Plans directory under user's home, not world-readable
+
+## Extended Cleanup (Phase 2)
+
+**Update `apps/desktop/src/main/lib/plans/cleanup.ts`:**
+
+```typescript
+const CLEANUP_EXTENSIONS = ['.md', '.waiting', '.response'];
+
+export async function cleanupOldPlanFiles(): Promise<void> {
+  try {
+    await fs.promises.mkdir(PLANS_TMP_DIR, { recursive: true });
+    const files = await fs.promises.readdir(PLANS_TMP_DIR);
+    const now = Date.now();
+
+    for (const file of files) {
+      // Clean all plan-related files, plus any orphaned .tmp files
+      const isRelevant = CLEANUP_EXTENSIONS.some(ext => file.endsWith(ext))
+        || file.includes('.tmp');
+
+      if (!isRelevant) continue;
+
+      const filePath = path.join(PLANS_TMP_DIR, file);
+      const stats = await fs.promises.stat(filePath).catch(() => null);
+
+      if (stats && now - stats.mtimeMs > MAX_AGE_MS) {
+        await fs.promises.unlink(filePath).catch(() => {});
+      }
+    }
+  } catch {
+    console.log('[plans/cleanup] Cleanup skipped or failed');
+  }
+}
+```
+
+---
+
+# Phase 3: Text Annotations - Detailed Implementation Plan
+
+## Overview
+
+Phase 3 adds Plannotator-style text annotations, allowing users to mark up plan text with deletions, replacements, comments, and insertions. Annotations are converted to structured feedback when rejecting a plan.
+
+## ⚠️ Critical: React + web-highlighter Conflict
+
+**Problem:** `web-highlighter` mutates the DOM directly by wrapping selected text in `<mark>` elements. React will **wipe these mutations** on any re-render of the markdown component.
+
+**This requires a spike before full implementation.**
+
+### Spike Tasks (Before Full Build)
+
+1. **Verify web-highlighter works with ReactMarkdown**
+   - Create a minimal test: render markdown, select text, add highlight
+   - Trigger a state update (not related to highlights)
+   - Check if highlights survive the re-render
+
+2. **Test DOM stability approaches:**
+   - **Option A: Memoize aggressively** - Wrap MarkdownRenderer in `React.memo` with stable props
+   - **Option B: Uncontrolled container** - Render markdown once into a static HTML container outside React's control
+   - **Option C: Hybrid** - Use React for initial render, then detach from React tree for annotations
+
+3. **Handle multi-source selections**
+   - Don't assume `sources[0]` is always sufficient
+   - Test selections spanning multiple elements
+   - Verify delete/restore works deterministically
+
+4. **Test annotation persistence**
+   - Save annotations to state
+   - Re-render component
+   - Verify annotations can be reapplied via `fromStore()`
+
+### Recommended Approach
+
+Based on Plannotator's implementation and React constraints:
+
+```typescript
+// Option B: Uncontrolled container with controlled data
+
+function AnnotatableViewer({ content, annotations, onAddAnnotation }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [initialHtml] = useState(() => renderMarkdownToHtml(content));
+
+  useEffect(() => {
+    // Only set innerHTML once on mount
+    if (containerRef.current && !containerRef.current.innerHTML) {
+      containerRef.current.innerHTML = initialHtml;
+    }
+  }, [initialHtml]);
+
+  // web-highlighter operates on the static DOM
+  // React state tracks annotations, but doesn't re-render the markdown
+}
+```
+
+## Key Insight: Selective Plannotator Integration
+
+Plannotator uses `web-highlighter` for text selection. We should:
+1. **Use web-highlighter** - proven library for cross-element text selection
+2. **Simplify annotation types** - start with 3 (not 5): DELETION, COMMENT, REPLACEMENT
+3. **Skip URL sharing** - we're in Electron, sharing via files is simpler
+4. **Integrate with DecisionBar** - annotations auto-generate feedback for rejection
+5. **Spike first** - validate React/DOM compatibility before full implementation
+
+## Architecture
+
+### Annotation Data Flow
+
+```
+User selects text in MarkdownRenderer
+         ↓
+web-highlighter fires CREATE event
+         ↓
+AnnotationToolbar appears at selection
+         ↓
+User chooses: Delete | Comment | Replace
+         ↓
+Annotation added to PlanViewerState.annotations[]
+         ↓
+Visual highlight applied to DOM
+         ↓
+AnnotationPanel shows annotation in sidebar
+         ↓
+On "Request Changes":
+  - exportAnnotationsToFeedback() generates markdown
+  - Feedback included in rejection response
+```
+
+### Annotation Types
+
+```typescript
+export enum AnnotationType {
+  DELETION = 'DELETION',        // Mark text for removal
+  REPLACEMENT = 'REPLACEMENT',  // Change text to something else
+  COMMENT = 'COMMENT',          // Add feedback on selected text
+}
+
+export interface Annotation {
+  id: string;
+  type: AnnotationType;
+  originalText: string;         // The selected text
+  newText?: string;             // For REPLACEMENT
+  comment?: string;             // For COMMENT
+  createdAt: number;
+  // web-highlighter metadata for DOM reconstruction
+  startMeta?: HighlightMeta;
+  endMeta?: HighlightMeta;
+}
+
+interface HighlightMeta {
+  parentTagName: string;
+  parentIndex: number;
+  textOffset: number;
+}
+```
+
+## Milestones
+
+### Milestone 3.1: Add web-highlighter Dependency
+
+```bash
+cd apps/desktop
+bun add web-highlighter
+```
+
+### Milestone 3.2: Extend PlanViewerState with Annotations
+
+**Update `apps/desktop/src/shared/tabs-types.ts`:**
+
+```typescript
+export enum AnnotationType {
+  DELETION = 'DELETION',
+  REPLACEMENT = 'REPLACEMENT',
+  COMMENT = 'COMMENT',
+}
+
+export interface Annotation {
+  id: string;
+  type: AnnotationType;
+  originalText: string;
+  newText?: string;
+  comment?: string;
+  createdAt: number;
+  startMeta?: {
+    parentTagName: string;
+    parentIndex: number;
+    textOffset: number;
+  };
+  endMeta?: {
+    parentTagName: string;
+    parentIndex: number;
+    textOffset: number;
+  };
+}
+
+export interface PlanViewerState {
+  // ... existing fields
+  annotations: Annotation[];
+}
+```
+
+### Milestone 3.3: Create AnnotatableViewer Component
+
+Wraps MarkdownRenderer with web-highlighter integration.
+
+**Create `apps/desktop/src/renderer/.../PlanViewerPane/AnnotatableViewer/AnnotatableViewer.tsx`:**
+
+```typescript
+import Highlighter from 'web-highlighter';
+import { useEffect, useRef, useState } from 'react';
+import { MarkdownRenderer } from 'renderer/components/MarkdownRenderer';
+import { AnnotationToolbar } from '../AnnotationToolbar';
+import type { Annotation, AnnotationType } from 'shared/tabs-types';
+
+interface AnnotatableViewerProps {
+  content: string;
+  annotations: Annotation[];
+  onAddAnnotation: (annotation: Annotation) => void;
+  onSelectAnnotation: (id: string) => void;
+  selectedAnnotationId: string | null;
+}
+
+export function AnnotatableViewer({
+  content,
+  annotations,
+  onAddAnnotation,
+  onSelectAnnotation,
+  selectedAnnotationId,
+}: AnnotatableViewerProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const highlighterRef = useRef<Highlighter | null>(null);
+  const [toolbarState, setToolbarState] = useState<{
+    element: HTMLElement;
+    source: any;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const highlighter = new Highlighter({
+      $root: containerRef.current,
+      exceptSelectors: ['.annotation-toolbar', 'button', '.annotation-panel'],
+      wrapTag: 'mark',
+      style: { className: 'annotation-highlight' },
+    });
+
+    highlighter.on(Highlighter.event.CREATE, ({ sources }) => {
+      if (sources.length > 0) {
+        const source = sources[0];
+        const doms = highlighter.getDoms(source.id);
+        if (doms?.length > 0) {
+          setToolbarState({ element: doms[0] as HTMLElement, source });
+        }
+      }
+    });
+
+    highlighter.on(Highlighter.event.CLICK, ({ id }) => {
+      onSelectAnnotation(id);
+    });
+
+    highlighter.run();
+    highlighterRef.current = highlighter;
+
+    return () => {
+      highlighter.dispose();
+    };
+  }, [content]);
+
+  // Apply existing annotations on mount
+  useEffect(() => {
+    if (!highlighterRef.current) return;
+
+    annotations.forEach(ann => {
+      if (ann.startMeta && ann.endMeta) {
+        highlighterRef.current?.fromStore(ann.startMeta, ann.endMeta, ann.originalText, ann.id);
+      }
+    });
+  }, [annotations]);
+
+  const handleAnnotate = (type: AnnotationType, text?: string) => {
+    if (!toolbarState) return;
+
+    const annotation: Annotation = {
+      id: toolbarState.source.id,
+      type,
+      originalText: toolbarState.source.text,
+      newText: type === 'REPLACEMENT' ? text : undefined,
+      comment: type === 'COMMENT' ? text : undefined,
+      createdAt: Date.now(),
+      startMeta: toolbarState.source.startMeta,
+      endMeta: toolbarState.source.endMeta,
+    };
+
+    // Apply visual style based on type
+    const doms = highlighterRef.current?.getDoms(annotation.id);
+    doms?.forEach(dom => {
+      dom.classList.add(`annotation-${type.toLowerCase()}`);
+    });
+
+    onAddAnnotation(annotation);
+    setToolbarState(null);
+  };
+
+  const handleToolbarClose = () => {
+    if (toolbarState) {
+      highlighterRef.current?.remove(toolbarState.source.id);
+    }
+    setToolbarState(null);
+  };
+
+  return (
+    <div ref={containerRef} className="annotatable-viewer">
+      <MarkdownRenderer content={content} />
+
+      {toolbarState && (
+        <AnnotationToolbar
+          element={toolbarState.element}
+          onAnnotate={handleAnnotate}
+          onClose={handleToolbarClose}
+        />
+      )}
+    </div>
+  );
+}
+```
+
+### Milestone 3.4: Create AnnotationToolbar Component
+
+**Create `apps/desktop/src/renderer/.../PlanViewerPane/AnnotationToolbar/AnnotationToolbar.tsx`:**
+
+```typescript
+import { useState } from 'react';
+import { createPortal } from 'react-dom';
+import { HiTrash, HiChatBubbleLeft, HiArrowsRightLeft } from 'react-icons/hi2';
+import { Button } from '@superset/ui/button';
+import { Textarea } from '@superset/ui/textarea';
+import type { AnnotationType } from 'shared/tabs-types';
+
+interface AnnotationToolbarProps {
+  element: HTMLElement;
+  onAnnotate: (type: AnnotationType, text?: string) => void;
+  onClose: () => void;
+}
+
+export function AnnotationToolbar({
+  element,
+  onAnnotate,
+  onClose,
+}: AnnotationToolbarProps) {
+  const [step, setStep] = useState<'menu' | 'input'>('menu');
+  const [activeType, setActiveType] = useState<AnnotationType | null>(null);
+  const [inputValue, setInputValue] = useState('');
+
+  const rect = element.getBoundingClientRect();
+  const top = rect.bottom + 8;
+  const left = rect.left;
+
+  const handleTypeSelect = (type: AnnotationType) => {
+    if (type === 'DELETION') {
+      onAnnotate(type);
+    } else {
+      setActiveType(type);
+      setStep('input');
+    }
+  };
+
+  const handleSubmit = () => {
+    if (activeType && inputValue.trim()) {
+      onAnnotate(activeType, inputValue.trim());
+    }
+  };
+
+  return createPortal(
+    <div
+      className="fixed z-50 bg-popover border rounded-lg shadow-lg p-2"
+      style={{ top, left }}
+    >
+      {step === 'menu' ? (
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleTypeSelect('DELETION')}
+            className="text-destructive"
+          >
+            <HiTrash className="size-4 mr-1" />
+            Delete
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleTypeSelect('COMMENT')}
+          >
+            <HiChatBubbleLeft className="size-4 mr-1" />
+            Comment
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => handleTypeSelect('REPLACEMENT')}
+          >
+            <HiArrowsRightLeft className="size-4 mr-1" />
+            Replace
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <div className="w-64 space-y-2">
+          <Textarea
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            placeholder={activeType === 'COMMENT' ? 'Add your comment...' : 'Replace with...'}
+            className="min-h-[60px]"
+            autoFocus
+          />
+          <div className="flex justify-end gap-1">
+            <Button variant="ghost" size="sm" onClick={() => setStep('menu')}>
+              Back
+            </Button>
+            <Button size="sm" onClick={handleSubmit} disabled={!inputValue.trim()}>
+              Add
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>,
+    document.body
+  );
+}
+```
+
+### Milestone 3.5: Create AnnotationPanel Component
+
+Sidebar showing all annotations with ability to select/delete.
+
+**Create `apps/desktop/src/renderer/.../PlanViewerPane/AnnotationPanel/AnnotationPanel.tsx`:**
+
+```typescript
+import { formatDistanceToNow } from 'date-fns';
+import { HiTrash, HiChatBubbleLeft, HiArrowsRightLeft } from 'react-icons/hi2';
+import type { Annotation } from 'shared/tabs-types';
+
+interface AnnotationPanelProps {
+  annotations: Annotation[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+}
+
+const typeConfig = {
+  DELETION: { icon: HiTrash, color: 'text-destructive', label: 'Delete' },
+  COMMENT: { icon: HiChatBubbleLeft, color: 'text-blue-500', label: 'Comment' },
+  REPLACEMENT: { icon: HiArrowsRightLeft, color: 'text-purple-500', label: 'Replace' },
+};
+
+export function AnnotationPanel({
+  annotations,
+  selectedId,
+  onSelect,
+  onDelete,
+}: AnnotationPanelProps) {
+  const sorted = [...annotations].sort((a, b) => a.createdAt - b.createdAt);
+
+  return (
+    <aside className="w-64 border-l bg-muted/30 flex flex-col">
+      <div className="p-3 border-b">
+        <h3 className="text-sm font-medium">
+          Annotations ({annotations.length})
+        </h3>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+        {sorted.length === 0 ? (
+          <p className="text-xs text-muted-foreground p-2">
+            Select text to add annotations
+          </p>
+        ) : (
+          sorted.map(ann => {
+            const config = typeConfig[ann.type];
+            const Icon = config.icon;
+            const isSelected = selectedId === ann.id;
+
+            return (
+              <div
+                key={ann.id}
+                className={`p-2 rounded border cursor-pointer transition-colors ${
+                  isSelected ? 'border-primary bg-primary/5' : 'border-transparent hover:bg-muted'
+                }`}
+                onClick={() => onSelect(ann.id)}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1">
+                    <Icon className={`size-3 ${config.color}`} />
+                    <span className="text-xs font-medium">{config.label}</span>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete(ann.id);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-destructive/10 rounded"
+                  >
+                    <HiTrash className="size-3 text-destructive" />
+                  </button>
+                </div>
+
+                <p className="text-xs text-muted-foreground truncate">
+                  "{ann.originalText}"
+                </p>
+
+                {(ann.comment || ann.newText) && (
+                  <p className="text-xs mt-1 text-foreground">
+                    → {ann.comment || ann.newText}
+                  </p>
+                )}
+
+                <span className="text-[10px] text-muted-foreground">
+                  {formatDistanceToNow(ann.createdAt, { addSuffix: true })}
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </aside>
+  );
+}
+```
+
+### Milestone 3.6: Create Feedback Export Utility
+
+**Create `apps/desktop/src/renderer/.../PlanViewerPane/utils/exportFeedback.ts`:**
+
+```typescript
+import type { Annotation } from 'shared/tabs-types';
+
+/**
+ * Converts annotations to structured markdown feedback.
+ * Format inspired by Plannotator's exportDiff.
+ */
+export function exportAnnotationsToFeedback(annotations: Annotation[]): string {
+  if (annotations.length === 0) {
+    return '';
+  }
+
+  const sorted = [...annotations].sort((a, b) => a.createdAt - b.createdAt);
+
+  let output = `# Plan Feedback\n\n`;
+  output += `I've reviewed this plan and have ${annotations.length} piece${annotations.length > 1 ? 's' : ''} of feedback:\n\n`;
+
+  sorted.forEach((ann, index) => {
+    output += `## ${index + 1}. `;
+
+    switch (ann.type) {
+      case 'DELETION':
+        output += `Remove this\n`;
+        output += `\`\`\`\n${ann.originalText}\n\`\`\`\n`;
+        output += `> I don't want this in the plan.\n`;
+        break;
+
+      case 'REPLACEMENT':
+        output += `Change this\n`;
+        output += `**From:**\n\`\`\`\n${ann.originalText}\n\`\`\`\n`;
+        output += `**To:**\n\`\`\`\n${ann.newText}\n\`\`\`\n`;
+        break;
+
+      case 'COMMENT':
+        output += `Feedback on: "${ann.originalText.slice(0, 50)}${ann.originalText.length > 50 ? '...' : ''}"\n`;
+        output += `> ${ann.comment}\n`;
+        break;
+    }
+
+    output += '\n';
+  });
+
+  return output;
+}
+```
+
+### Milestone 3.7: Integrate with DecisionBar
+
+**Update DecisionBar to auto-generate feedback from annotations:**
+
+```typescript
+const handleReject = async (manualFeedback: string) => {
+  // Combine manual feedback with annotation-generated feedback
+  const annotationFeedback = exportAnnotationsToFeedback(annotations);
+  const combinedFeedback = annotationFeedback
+    ? `${annotationFeedback}\n---\n\n## Additional Notes\n\n${manualFeedback}`
+    : manualFeedback;
+
+  onReject(combinedFeedback);
+};
+```
+
+### Milestone 3.8: Add CSS for Annotation Highlights
+
+**Add to global styles or component CSS:**
+
+```css
+.annotation-highlight {
+  background-color: rgba(255, 220, 0, 0.3);
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.annotation-highlight:hover {
+  background-color: rgba(255, 220, 0, 0.5);
+}
+
+.annotation-highlight.annotation-deletion {
+  background-color: rgba(239, 68, 68, 0.2);
+  text-decoration: line-through;
+}
+
+.annotation-highlight.annotation-replacement {
+  background-color: rgba(168, 85, 247, 0.2);
+}
+
+.annotation-highlight.annotation-comment {
+  background-color: rgba(59, 130, 246, 0.2);
+  border-bottom: 2px solid rgb(59, 130, 246);
+}
+
+.annotation-highlight.selected {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+```
+
+## New Files (Phase 3)
+
+```
+apps/desktop/src/renderer/.../PlanViewerPane/
+├── AnnotatableViewer/
+│   ├── AnnotatableViewer.tsx
+│   └── index.ts
+├── AnnotationToolbar/
+│   ├── AnnotationToolbar.tsx
+│   └── index.ts
+├── AnnotationPanel/
+│   ├── AnnotationPanel.tsx
+│   └── index.ts
+├── utils/
+│   └── exportFeedback.ts
+└── styles.css
+```
+
+## Dependencies (Phase 3)
+
+**New dependency:**
+- `web-highlighter` - DOM-based text selection and highlighting
+
+## Updated PlanViewerPane Layout (Phase 3)
+
+```typescript
+export function PlanViewerPane({ ... }) {
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [showAnnotationPanel, setShowAnnotationPanel] = useState(true);
+
+  return (
+    <MosaicWindow ...>
+      <div className="flex h-full">
+        {/* Main content with annotations */}
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1 overflow-auto p-4">
+            <AnnotatableViewer
+              content={planViewer.content}
+              annotations={planViewer.annotations}
+              onAddAnnotation={handleAddAnnotation}
+              onSelectAnnotation={setSelectedAnnotationId}
+              selectedAnnotationId={selectedAnnotationId}
+            />
+          </div>
+          <DecisionBar
+            annotations={planViewer.annotations}
+            ...
+          />
+        </div>
+
+        {/* Annotation sidebar */}
+        {showAnnotationPanel && planViewer.annotations.length > 0 && (
+          <AnnotationPanel
+            annotations={planViewer.annotations}
+            selectedId={selectedAnnotationId}
+            onSelect={setSelectedAnnotationId}
+            onDelete={handleDeleteAnnotation}
+          />
+        )}
+      </div>
+    </MosaicWindow>
+  );
+}
+```
+
+---
+
+## Summary: Phase 2 vs Phase 3
+
+| Aspect | Phase 2 | Phase 3 |
+|--------|---------|---------|
+| **Goal** | Basic approve/reject with text feedback | Rich annotation-based feedback |
+| **UI** | DecisionBar with buttons + textarea | + AnnotatableViewer + Toolbar + Panel |
+| **Feedback** | Manual text input | Auto-generated from annotations |
+| **Dependencies** | None new | + web-highlighter |
+| **Complexity** | Medium (tRPC + response files) | High (DOM manipulation + state sync) |
+| **Time Estimate** | Can be done independently | Builds on Phase 2 |
+
+## Implementation Order Recommendation
+
+1. **Phase 2 first** - Establishes the response channel and basic workflow
+2. **Phase 3 after** - Enhances feedback quality with annotations
+
+Phase 2 is valuable standalone (users can approve/reject with manual feedback). Phase 3 adds polish but isn't required for core functionality.
+
+---
+
+## Gotchas and Edge Cases
+
+This section collects implementation pitfalls identified during architectural review.
+
+### Phase 2 Gotchas
+
+**1. Path Traversal with Unvalidated planId**
+```typescript
+// ❌ DANGEROUS: planId could be "../../../etc/passwd"
+const planPath = path.join(PLANS_TMP_DIR, `${planId}.md`);
+
+// ✅ SAFE: Validate format before use
+const PLAN_ID_PATTERN = /^plan-\d+-[a-z0-9]+$/;
+if (!PLAN_ID_PATTERN.test(planId)) {
+  throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid plan ID format' });
+}
+```
+
+**2. Stale `.waiting` Files**
+If an agent crashes or disconnects without cleanup, `.waiting` files remain orphaned. The UI will wrongly allow responses that nobody will read.
+
+**Mitigation:**
+- Check PID in `.waiting` file is still running before allowing response
+- OR use a heartbeat system (agent writes timestamp to `.waiting` every N seconds)
+- OR accept stale files as a known limitation with 24h cleanup
+
+**3. Race Condition: Multiple Tabs Respond to Same Plan**
+Two browser tabs could both submit responses before either refresh sees the other's status.
+
+**Mitigation:**
+- Idempotency check in tRPC: reject if `.response` already exists
+- Optimistic lock: read `.response` before write, fail if present
+
+**4. Windows Compatibility**
+The shell script uses bash-isms (`$((ELAPSED + 1))`, `[ -f ... ]`). Windows Git Bash handles most, but:
+- Prefer cross-platform Node.js implementations for agent tools like OpenCode
+- Test shell hooks under Git Bash on Windows before shipping
+
+**5. Localhost CSRF**
+Any website can POST to `http://127.0.0.1:PORT/hook/plan`. While the origin is local, a malicious webpage could trigger fake plan submissions.
+
+**Mitigation options (choose one):**
+- Add a per-install secret token to POST body, validate in handler
+- Restrict CORS to Electron's app origin
+- Use a Unix socket instead of HTTP (macOS/Linux only)
+
+### Phase 3 Gotchas
+
+**1. React + web-highlighter DOM Conflict**
+`web-highlighter` mutates the DOM directly. Any React re-render will wipe annotations.
+
+**Symptoms:** Annotations disappear when unrelated state changes.
+
+**Solutions tested in spike:**
+- Memoize `<AnnotatableViewer>` aggressively
+- Use `dangerouslySetInnerHTML` with static markdown output
+- Or render to a detached container React doesn't manage
+
+**2. `fromStore()` Multi-Source Pitfall**
+Plannotator assumes `sources[0]` in highlight events. Selections spanning multiple DOM elements produce multiple sources.
+
+```typescript
+// ❌ May miss parts of selection
+const source = sources[0];
+
+// ✅ Handle all sources
+sources.forEach(source => {
+  // Store each source's meta
+});
+```
+
+**3. Export Formatting Edge Cases**
+When exporting annotations to markdown feedback:
+
+| Scenario | Problem | Fix |
+|----------|---------|-----|
+| Selected text contains backticks | Breaks fenced code blocks | Escape or use indented blocks |
+| Selected text is ambiguous | "Change this" matches multiple places | Include line numbers or context |
+| Very long selections | Feedback becomes unwieldy | Truncate with "..." |
+| Selections inside code blocks | Formatting looks wrong | Detect and preserve code block wrapper |
+
+**4. Annotation Persistence Across Sessions**
+`web-highlighter`'s `fromStore()` relies on DOM structure. If markdown rendering changes (e.g., plugin update), stored annotations may fail to reapply.
+
+**Mitigation:**
+- Store text content alongside meta for fallback matching
+- Accept that annotations are ephemeral (plan lifetime only)
+
+**5. Overlapping Annotations**
+Users might annotate the same text twice (e.g., DELETE then COMMENT). `web-highlighter` handles overlap, but UI needs to decide precedence.
+
+**Recommendation:** Prevent overlap—remove old annotation when new one covers same range, or merge them.
+
+### General Gotchas
+
+**1. Agent Timeout vs. UI Timeout**
+Agent hooks timeout after 30 minutes. If UI takes longer to render/respond, agent may already have timed out.
+
+**Ensure:** UI displays "Agent no longer waiting" if `.waiting` file is absent.
+
+**2. Cleanup Timing**
+24-hour cleanup is generous but may leave many orphaned files during active development.
+
+**Consider:** Cleanup on app quit + 24h background sweep.
+
+**3. Multiple Concurrent Plans**
+User might have multiple plan review panes open. Ensure each pane tracks its own `planId` and doesn't mix responses.
+
+**Test case:** Open 3 plans → approve middle one → verify correct plan gets response.
+
+---
+
+## References
+
+- [Plannotator](https://github.com/backnotprop/plannotator) - Original implementation reference
+- [web-highlighter](https://github.com/nicokempe/web-highlighter) - DOM selection library
+- [Claude Code Hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) - Agent hook system
