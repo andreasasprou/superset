@@ -107,6 +107,9 @@ export class Session {
 
 	// Snapshot boundary tracking - allows capturing consistent state with continuous output
 	private snapshotBoundaryIndex: number | null = null;
+
+	// PTY process ID from subprocess
+	private ptyPid: number | null = null;
 	private snapshotBoundaryWaiters: Array<() => void> = [];
 
 	// Callbacks

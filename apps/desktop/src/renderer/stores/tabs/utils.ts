@@ -435,7 +435,7 @@ export const createPlanViewerPane = (
 		tabId,
 		type: "plan-viewer",
 		name: title,
-		needsAttention: true, // Highlight that plan needs review
+		status: "review", // Highlight that plan needs review
 		planViewer,
 	};
 };
