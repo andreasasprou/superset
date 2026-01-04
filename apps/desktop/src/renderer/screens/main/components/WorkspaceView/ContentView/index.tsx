@@ -63,8 +63,8 @@ export function ContentView() {
 						<div />
 					</ContentHeader>
 				)}
-				<div className="flex-1 overflow-hidden bg-tertiary p-1">
-					<div className="h-full bg-background rounded-lg overflow-hidden border border-border">
+				<div className="flex-1 overflow-hidden bg-tertiary">
+					<div className="h-full bg-background overflow-hidden border border-border">
 						<ChangesContent />
 					</div>
 				</div>
