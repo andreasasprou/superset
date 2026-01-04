@@ -3,7 +3,6 @@ import { Button } from "@superset/ui/button";
 import { useFeatureFlagEnabled } from "posthog-js/react";
 import { useCallback, useState } from "react";
 import { DndProvider } from "react-dnd";
-import { useHotkeys } from "react-hotkeys-hook";
 import { HiArrowPath } from "react-icons/hi2";
 import { NewWorkspaceModal } from "renderer/components/NewWorkspaceModal";
 import { SetupConfigModal } from "renderer/components/SetupConfigModal";
@@ -23,7 +22,6 @@ import { findPanePath, getFirstPaneId } from "renderer/stores/tabs/utils";
 import { useWorkspaceInitStore } from "renderer/stores/workspace-init";
 import { useWorkspaceSidebarStore } from "renderer/stores/workspace-sidebar-state";
 import { DEFAULT_NAVIGATION_STYLE } from "shared/constants";
-import { getHotkey } from "shared/hotkeys";
 import { dragDropManager } from "../../lib/dnd";
 import { AppFrame } from "./components/AppFrame";
 import { Background } from "./components/Background";
@@ -137,9 +135,14 @@ export function MainScreen() {
 		[toggleSidebar, isWorkspaceView],
 	);
 
-	useHotkeys(getHotkey("TOGGLE_WORKSPACE_SIDEBAR"), () => {
-		if (isSidebarMode) toggleWorkspaceSidebar();
-	}, [toggleWorkspaceSidebar, isSidebarMode]);
+	useAppHotkey(
+		"TOGGLE_WORKSPACE_SIDEBAR",
+		() => {
+			if (isSidebarMode) toggleWorkspaceSidebar();
+		},
+		undefined,
+		[toggleWorkspaceSidebar, isSidebarMode],
+	);
 
 	/**
 	 * Resolves the target pane for split operations.
