@@ -40,9 +40,10 @@ export const CONFIG_TEMPLATE = `{
 }`;
 
 export const NOTIFICATION_EVENTS = {
-	AGENT_COMPLETE: "agent-complete",
+	AGENT_LIFECYCLE: "agent-lifecycle",
 	FOCUS_TAB: "focus-tab",
 } as const;
 
 // Default user preference values
 export const DEFAULT_CONFIRM_ON_QUIT = true;
+export const DEFAULT_TERMINAL_LINK_BEHAVIOR = "external-editor" as const;

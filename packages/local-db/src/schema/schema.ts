@@ -5,6 +5,7 @@ import type {
 	ExternalApp,
 	GitHubStatus,
 	GitStatus,
+	TerminalLinkBehavior,
 	TerminalPreset,
 	WorkspaceType,
 } from "./zod";
@@ -100,16 +101,33 @@ export const workspaces = sqliteTable(
 		lastOpenedAt: integer("last_opened_at")
 			.notNull()
 			.$defaultFn(() => Date.now()),
+		isUnread: integer("is_unread", { mode: "boolean" }).default(false),
 	},
 	(table) => [
 		index("workspaces_project_id_idx").on(table.projectId),
 		index("workspaces_worktree_id_idx").on(table.worktreeId),
 		index("workspaces_last_opened_at_idx").on(table.lastOpenedAt),
+		// NOTE: Migration 0006 creates an additional partial unique index:
+		// CREATE UNIQUE INDEX workspaces_unique_branch_per_project
+		//   ON workspaces(project_id) WHERE type = 'branch'
+		// This enforces one branch workspace per project. Drizzle's schema DSL
+		// doesn't support partial/filtered indexes, so this constraint is only
+		// applied via the migration, not schema push. See migration 0006 for details.
 	],
 );
 
 export type InsertWorkspace = typeof workspaces.$inferInsert;
 export type SelectWorkspace = typeof workspaces.$inferSelect;
+
+/**
+ * Navigation style for workspace display
+ */
+export type NavigationStyle = "top-bar" | "sidebar";
+
+/**
+ * Position for group tabs display
+ */
+export type GroupTabsPosition = "sidebar" | "content-header";
 
 /**
  * Settings table - single row with typed columns
@@ -127,6 +145,12 @@ export const settings = sqliteTable("settings", {
 	selectedRingtoneId: text("selected_ringtone_id"),
 	activeOrganizationId: text("active_organization_id"),
 	confirmOnQuit: integer("confirm_on_quit", { mode: "boolean" }),
+	terminalLinkBehavior: text(
+		"terminal_link_behavior",
+	).$type<TerminalLinkBehavior>(),
+	navigationStyle: text("navigation_style").$type<NavigationStyle>(),
+	groupTabsPosition: text("group_tabs_position").$type<GroupTabsPosition>(),
+	terminalPersistence: integer("terminal_persistence", { mode: "boolean" }),
 });
 
 export type InsertSettings = typeof settings.$inferInsert;

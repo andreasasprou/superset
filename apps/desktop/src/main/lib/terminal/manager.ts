@@ -110,6 +110,7 @@ export class TerminalManager extends EventEmitter {
 
 		session.pty.onExit(async ({ exitCode, signal }) => {
 			session.isAlive = false;
+			session.writeQueue.dispose();
 			flushSession(session);
 
 			// Check if shell crashed quickly - try fallback
@@ -163,8 +164,18 @@ export class TerminalManager extends EventEmitter {
 			throw new Error(`Terminal session ${paneId} not found or not alive`);
 		}
 
-		session.pty.write(data);
+		if (!session.writeQueue.write(data)) {
+			throw new Error(`Terminal ${paneId} write queue full`);
+		}
 		session.lastActive = Date.now();
+	}
+
+	/**
+	 * Acknowledge cold restore (no-op in non-daemon mode).
+	 * Cold restore only applies to daemon mode where sessions survive app restart.
+	 */
+	ackColdRestore(_paneId: string): void {
+		// No-op in non-daemon mode - cold restore is a daemon-only feature
 	}
 
 	resize(params: { paneId: string; cols: number; rows: number }): void {
@@ -314,12 +325,14 @@ export class TerminalManager extends EventEmitter {
 	): Promise<boolean> {
 		if (!session.isAlive) {
 			session.deleteHistoryOnExit = true;
+			session.writeQueue.dispose();
 			await closeSessionHistory(session);
 			this.sessions.delete(paneId);
 			return true;
 		}
 
 		session.deleteHistoryOnExit = true;
+		session.writeQueue.dispose();
 
 		return new Promise<boolean>((resolve) => {
 			let resolved = false;
@@ -378,7 +391,7 @@ export class TerminalManager extends EventEmitter {
 		});
 	}
 
-	getSessionCountByWorkspaceId(workspaceId: string): number {
+	async getSessionCountByWorkspaceId(workspaceId: string): Promise<number> {
 		return Array.from(this.sessions.values()).filter(
 			(session) => session.workspaceId === workspaceId && session.isAlive,
 		).length;
@@ -392,7 +405,7 @@ export class TerminalManager extends EventEmitter {
 		for (const [paneId, session] of this.sessions.entries()) {
 			if (session.workspaceId === workspaceId && session.isAlive) {
 				try {
-					session.pty.write("\n");
+					session.writeQueue.write("\n");
 				} catch (error) {
 					console.warn(
 						`[TerminalManager] Failed to refresh prompt for pane ${paneId}:`,
@@ -406,7 +419,12 @@ export class TerminalManager extends EventEmitter {
 	detachAllListeners(): void {
 		for (const event of this.eventNames()) {
 			const name = String(event);
-			if (name.startsWith("data:") || name.startsWith("exit:")) {
+			if (
+				name.startsWith("data:") ||
+				name.startsWith("exit:") ||
+				name.startsWith("disconnect:") ||
+				name.startsWith("error:")
+			) {
 				this.removeAllListeners(event);
 			}
 		}
@@ -436,8 +454,10 @@ export class TerminalManager extends EventEmitter {
 				});
 
 				exitPromises.push(exitPromise);
+				session.writeQueue.dispose();
 				session.pty.kill();
 			} else {
+				session.writeQueue.dispose();
 				await closeSessionHistory(session);
 			}
 		}

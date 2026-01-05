@@ -4,7 +4,7 @@ import { projects, workspaces, worktrees } from "@superset/local-db";
 import { observable } from "@trpc/server/observable";
 import { eq } from "drizzle-orm";
 import { localDb } from "main/lib/local-db";
-import { terminalManager } from "main/lib/terminal";
+import { getActiveTerminalManager } from "main/lib/terminal";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
 import { assertWorkspaceUsable } from "../workspaces/utils/usability";
@@ -26,6 +26,9 @@ import { resolveCwd } from "./utils";
  * - SUPERSET_PORT: The hooks server port for agent completion notifications
  */
 export const createTerminalRouter = () => {
+	// Get the active terminal manager (in-process or daemon-based)
+	const terminalManager = getActiveTerminalManager();
+
 	return router({
 		createOrAttach: publicProcedure
 			.input(
@@ -37,6 +40,7 @@ export const createTerminalRouter = () => {
 					rows: z.number().optional(),
 					cwd: z.string().optional(),
 					initialCommands: z.array(z.string()).optional(),
+					skipColdRestore: z.boolean().optional(),
 				}),
 			)
 			.mutation(async ({ input }) => {
@@ -48,6 +52,7 @@ export const createTerminalRouter = () => {
 					rows,
 					cwd: cwdOverride,
 					initialCommands,
+					skipColdRestore,
 				} = input;
 
 				// Resolve cwd: absolute paths stay as-is, relative paths resolve against workspace path
@@ -89,6 +94,7 @@ export const createTerminalRouter = () => {
 					cols,
 					rows,
 					initialCommands,
+					skipColdRestore,
 				});
 
 				return {
@@ -96,6 +102,11 @@ export const createTerminalRouter = () => {
 					isNew: result.isNew,
 					scrollback: result.scrollback,
 					wasRecovered: result.wasRecovered,
+					// Cold restore fields (for reboot recovery)
+					isColdRestore: result.isColdRestore,
+					previousCwd: result.previousCwd,
+					// Include snapshot for daemon mode (renderer can use for rehydration)
+					snapshot: result.snapshot,
 				};
 			}),
 
@@ -107,7 +118,35 @@ export const createTerminalRouter = () => {
 				}),
 			)
 			.mutation(async ({ input }) => {
-				terminalManager.write(input);
+				try {
+					terminalManager.write(input);
+				} catch (error) {
+					const message =
+						error instanceof Error ? error.message : "Write failed";
+
+					// If session is gone, emit exit instead of error.
+					// This completes the subscription cleanly and prevents error toast floods
+					// when workspaces with terminals are deleted.
+					if (message.includes("not found or not alive")) {
+						terminalManager.emit(`exit:${input.paneId}`, 0, "SIGTERM");
+						return;
+					}
+
+					terminalManager.emit(`error:${input.paneId}`, {
+						error: message,
+						code: "WRITE_FAILED",
+					});
+				}
+			}),
+
+		/**
+		 * Acknowledge cold restore - clears the sticky cold restore info.
+		 * Call this after displaying the cold restore UI and starting a new shell.
+		 */
+		ackColdRestore: publicProcedure
+			.input(z.object({ paneId: z.string() }))
+			.mutation(({ input }) => {
+				terminalManager.ackColdRestore(input.paneId);
 			}),
 
 		resize: publicProcedure
@@ -261,6 +300,8 @@ export const createTerminalRouter = () => {
 				return observable<
 					| { type: "data"; data: string }
 					| { type: "exit"; exitCode: number; signal?: number }
+					| { type: "disconnect"; reason: string }
+					| { type: "error"; error: string; code?: string }
 				>((emit) => {
 					const onData = (data: string) => {
 						emit.next({ type: "data", data });
@@ -271,13 +312,29 @@ export const createTerminalRouter = () => {
 						emit.complete();
 					};
 
+					const onDisconnect = (reason: string) => {
+						emit.next({ type: "disconnect", reason });
+					};
+
+					const onError = (payload: { error: string; code?: string }) => {
+						emit.next({
+							type: "error",
+							error: payload.error,
+							code: payload.code,
+						});
+					};
+
 					terminalManager.on(`data:${paneId}`, onData);
 					terminalManager.on(`exit:${paneId}`, onExit);
+					terminalManager.on(`disconnect:${paneId}`, onDisconnect);
+					terminalManager.on(`error:${paneId}`, onError);
 
 					// Cleanup on unsubscribe
 					return () => {
 						terminalManager.off(`data:${paneId}`, onData);
 						terminalManager.off(`exit:${paneId}`, onExit);
+						terminalManager.off(`disconnect:${paneId}`, onDisconnect);
+						terminalManager.off(`error:${paneId}`, onError);
 					};
 				});
 			}),
