@@ -10,7 +10,6 @@ import {
 import { useWorkspaceViewModeStore } from "renderer/stores/workspace-view-mode";
 import { ContentView } from "./ContentView";
 import { ResizableSidebar } from "./ResizableSidebar";
-import { WorkspaceActionBar } from "./WorkspaceActionBar";
 import { WorkspaceInitializingView } from "./WorkspaceInitializingView";
 
 export function WorkspaceView() {
