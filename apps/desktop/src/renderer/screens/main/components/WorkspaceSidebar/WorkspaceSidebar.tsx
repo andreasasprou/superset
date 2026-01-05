@@ -1,4 +1,5 @@
 import { useWorkspaceShortcuts } from "renderer/hooks/useWorkspaceShortcuts";
+import { PortsList } from "./PortsList";
 import { ProjectSection } from "./ProjectSection";
 import { WorkspaceSidebarFooter } from "./WorkspaceSidebarFooter";
 import { WorkspaceSidebarHeader } from "./WorkspaceSidebarHeader";
@@ -37,6 +38,8 @@ export function WorkspaceSidebar() {
 					</div>
 				)}
 			</div>
+
+			<PortsList />
 
 			<WorkspaceSidebarFooter />
 		</div>
