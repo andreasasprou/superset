@@ -76,8 +76,8 @@ export function WorkspaceListItem({
 	const rename = useWorkspaceRename(id, name);
 	const tabs = useTabsStore((s) => s.tabs);
 	const panes = useTabsStore((s) => s.panes);
-	const clearWorkspaceAttention = useTabsStore(
-		(s) => s.clearWorkspaceAttention,
+	const clearWorkspaceAttentionStatus = useTabsStore(
+		(s) => s.clearWorkspaceAttentionStatus,
 	);
 	const utils = trpc.useUtils();
 	const openInFinder = trpc.external.openInFinder.useMutation({
@@ -111,7 +111,7 @@ export function WorkspaceListItem({
 	);
 	const hasPaneAttention = Object.values(panes)
 		.filter((p) => p != null && workspacePaneIds.has(p.id))
-		.some((p) => p.needsAttention);
+		.some((p) => p.status && p.status !== "idle");
 
 	// Show indicator if workspace is manually marked as unread OR has pane-level attention
 	const needsAttention = isUnread || hasPaneAttention;
@@ -119,7 +119,7 @@ export function WorkspaceListItem({
 	const handleClick = () => {
 		if (!rename.isRenaming) {
 			setActiveWorkspace.mutate({ id });
-			clearWorkspaceAttention(id);
+			clearWorkspaceAttentionStatus(id);
 		}
 	};
 

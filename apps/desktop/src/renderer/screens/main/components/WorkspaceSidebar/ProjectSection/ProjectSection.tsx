@@ -60,10 +60,13 @@ export function ProjectSection({
 								<WorkspaceListItem
 									key={workspace.id}
 									id={workspace.id}
+									projectId={workspace.projectId}
+									worktreePath={workspace.worktreePath}
 									name={workspace.name}
 									branch={workspace.branch}
 									type={workspace.type}
 									isActive={workspace.id === activeWorkspaceId}
+									index={index}
 									shortcutIndex={shortcutBaseIndex + index}
 								/>
 							))}

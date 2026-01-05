@@ -207,5 +207,25 @@ export const createSettingsRouter = () => {
 
 				return { success: true };
 			}),
+
+		getTerminalPersistence: publicProcedure.query(() => {
+			const row = getSettings();
+			return row.terminalPersistence ?? false;
+		}),
+
+		setTerminalPersistence: publicProcedure
+			.input(z.object({ enabled: z.boolean() }))
+			.mutation(({ input }) => {
+				localDb
+					.insert(settings)
+					.values({ id: 1, terminalPersistence: input.enabled })
+					.onConflictDoUpdate({
+						target: settings.id,
+						set: { terminalPersistence: input.enabled },
+					})
+					.run();
+
+				return { success: true };
+			}),
 	});
 };
