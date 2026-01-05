@@ -21,7 +21,6 @@ import { useAgentHookListener } from "renderer/stores/tabs/useAgentHookListener"
 import { findPanePath, getFirstPaneId } from "renderer/stores/tabs/utils";
 import { useWorkspaceInitStore } from "renderer/stores/workspace-init";
 import { useWorkspaceSidebarStore } from "renderer/stores/workspace-sidebar-state";
-import { DEFAULT_NAVIGATION_STYLE } from "shared/constants";
 import { dragDropManager } from "../../lib/dnd";
 import { AppFrame } from "./components/AppFrame";
 import { Background } from "./components/Background";
@@ -80,10 +79,6 @@ export function MainScreen() {
 		FEATURE_FLAGS.ELECTRIC_TASKS_ACCESS,
 	);
 
-	// Navigation style setting
-	const { data: navigationStyle } = trpc.settings.getNavigationStyle.useQuery();
-	const effectiveNavigationStyle = navigationStyle ?? DEFAULT_NAVIGATION_STYLE;
-	const isSidebarMode = effectiveNavigationStyle === "sidebar";
 	const {
 		data: activeWorkspace,
 		isLoading: isWorkspaceLoading,
@@ -138,10 +133,10 @@ export function MainScreen() {
 	useAppHotkey(
 		"TOGGLE_WORKSPACE_SIDEBAR",
 		() => {
-			if (isSidebarMode) toggleWorkspaceSidebar();
+			toggleWorkspaceSidebar();
 		},
 		undefined,
-		[toggleWorkspaceSidebar, isSidebarMode],
+		[toggleWorkspaceSidebar],
 	);
 
 	/**
@@ -369,9 +364,9 @@ export function MainScreen() {
 					<StartView />
 				) : (
 					<div className="flex flex-col h-full w-full">
-						<TopBar navigationStyle={effectiveNavigationStyle} />
+						<TopBar />
 						<div className="flex flex-1 overflow-hidden">
-							{isSidebarMode && <ResizableWorkspaceSidebar />}
+							<ResizableWorkspaceSidebar />
 							{renderContent()}
 						</div>
 					</div>
