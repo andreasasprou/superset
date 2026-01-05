@@ -10,9 +10,6 @@ import {
 import { Switch } from "@superset/ui/switch";
 import { trpc } from "renderer/lib/trpc";
 
-type NavigationStyle = "top-bar" | "sidebar";
-type GroupTabsPosition = "sidebar" | "content-header";
-
 export function BehaviorSettings() {
 	const utils = trpc.useUtils();
 
@@ -33,49 +30,6 @@ export function BehaviorSettings() {
 		},
 		onSettled: () => {
 			utils.settings.getConfirmOnQuit.invalidate();
-		},
-	});
-
-	// Navigation style setting
-	const { data: navigationStyle, isLoading: isNavLoading } =
-		trpc.settings.getNavigationStyle.useQuery();
-	const setNavigationStyle = trpc.settings.setNavigationStyle.useMutation({
-		onMutate: async ({ style }) => {
-			await utils.settings.getNavigationStyle.cancel();
-			const previous = utils.settings.getNavigationStyle.getData();
-			utils.settings.getNavigationStyle.setData(undefined, style);
-			return { previous };
-		},
-		onError: (_err, _vars, context) => {
-			if (context?.previous !== undefined) {
-				utils.settings.getNavigationStyle.setData(undefined, context.previous);
-			}
-		},
-		onSettled: () => {
-			utils.settings.getNavigationStyle.invalidate();
-		},
-	});
-
-	// Group tabs position setting
-	const { data: groupTabsPosition, isLoading: isGroupTabsLoading } =
-		trpc.settings.getGroupTabsPosition.useQuery();
-	const setGroupTabsPosition = trpc.settings.setGroupTabsPosition.useMutation({
-		onMutate: async ({ position }) => {
-			await utils.settings.getGroupTabsPosition.cancel();
-			const previous = utils.settings.getGroupTabsPosition.getData();
-			utils.settings.getGroupTabsPosition.setData(undefined, position);
-			return { previous };
-		},
-		onError: (_err, _vars, context) => {
-			if (context?.previous !== undefined) {
-				utils.settings.getGroupTabsPosition.setData(
-					undefined,
-					context.previous,
-				);
-			}
-		},
-		onSettled: () => {
-			utils.settings.getGroupTabsPosition.invalidate();
 		},
 	});
 
@@ -114,14 +68,6 @@ export function BehaviorSettings() {
 		});
 	};
 
-	const handleNavigationStyleChange = (style: NavigationStyle) => {
-		setNavigationStyle.mutate({ style });
-	};
-
-	const handleGroupTabsPositionChange = (position: GroupTabsPosition) => {
-		setGroupTabsPosition.mutate({ position });
-	};
-
 	return (
 		<div className="p-6 max-w-4xl w-full">
 			<div className="mb-8">
@@ -132,59 +78,6 @@ export function BehaviorSettings() {
 			</div>
 
 			<div className="space-y-6">
-				{/* Navigation Style */}
-				<div className="flex items-center justify-between">
-					<div className="space-y-0.5">
-						<Label htmlFor="navigation-style" className="text-sm font-medium">
-							Navigation style
-						</Label>
-						<p className="text-xs text-muted-foreground">
-							Choose how workspaces are displayed
-						</p>
-					</div>
-					<Select
-						value={navigationStyle ?? "sidebar"}
-						onValueChange={handleNavigationStyleChange}
-						disabled={isNavLoading || setNavigationStyle.isPending}
-					>
-						<SelectTrigger id="navigation-style" className="w-[140px]">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="top-bar">Top bar</SelectItem>
-							<SelectItem value="sidebar">Sidebar</SelectItem>
-						</SelectContent>
-					</Select>
-				</div>
-
-				{/* Group Tabs Position */}
-				<div className="flex items-center justify-between">
-					<div className="space-y-0.5">
-						<Label
-							htmlFor="group-tabs-position"
-							className="text-sm font-medium"
-						>
-							Group tabs position
-						</Label>
-						<p className="text-xs text-muted-foreground">
-							Sidebar includes rename, reorder, and presets; header is compact
-						</p>
-					</div>
-					<Select
-						value={groupTabsPosition ?? "content-header"}
-						onValueChange={handleGroupTabsPositionChange}
-						disabled={isGroupTabsLoading || setGroupTabsPosition.isPending}
-					>
-						<SelectTrigger id="group-tabs-position" className="w-[160px]">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="sidebar">Sidebar</SelectItem>
-							<SelectItem value="content-header">Content header</SelectItem>
-						</SelectContent>
-					</Select>
-				</div>
-
 				{/* Confirm on Quit */}
 				<div className="flex items-center justify-between">
 					<div className="space-y-0.5">

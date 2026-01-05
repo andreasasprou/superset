@@ -1,22 +1,13 @@
-import type { NavigationStyle } from "@superset/local-db";
 import { trpc } from "renderer/lib/trpc";
 import { AvatarDropdown } from "../AvatarDropdown";
-import { SidebarControl } from "../SidebarControl";
 import { WindowControls } from "./WindowControls";
-import { WorkspaceControls } from "./WorkspaceControls";
 import { WorkspaceSidebarControl } from "./WorkspaceSidebarControl";
-import { WorkspacesTabs } from "./WorkspaceTabs";
 
-interface TopBarProps {
-	navigationStyle?: NavigationStyle;
-}
-
-export function TopBar({ navigationStyle = "top-bar" }: TopBarProps) {
+export function TopBar() {
 	const { data: platform } = trpc.window.getPlatform.useQuery();
 	const { data: activeWorkspace } = trpc.workspaces.getActive.useQuery();
 	// Default to Mac layout while loading to avoid overlap with traffic lights
 	const isMac = platform === undefined || platform === "darwin";
-	const isSidebarMode = navigationStyle === "sidebar";
 
 	return (
 		<div className="drag gap-2 h-12 w-full flex items-center justify-between bg-background border-b border-border">
@@ -26,33 +17,20 @@ export function TopBar({ navigationStyle = "top-bar" }: TopBarProps) {
 					paddingLeft: isMac ? "88px" : "16px",
 				}}
 			>
-				{isSidebarMode && <WorkspaceSidebarControl />}
-				{!isSidebarMode && <SidebarControl />}
+				<WorkspaceSidebarControl />
 			</div>
 
-			{isSidebarMode ? (
-				<div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden h-full px-4">
-					{activeWorkspace && (
-						<span className="text-sm font-medium truncate">
-							{activeWorkspace.project?.name ?? "Workspace"}
-							<span className="text-muted-foreground mx-2">/</span>
-							{activeWorkspace.name}
-						</span>
-					)}
-				</div>
-			) : (
-				<div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden h-full">
-					<WorkspacesTabs />
-				</div>
-			)}
+			<div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden h-full px-4">
+				{activeWorkspace && (
+					<span className="text-sm font-medium truncate">
+						{activeWorkspace.project?.name ?? "Workspace"}
+						<span className="text-muted-foreground mx-2">/</span>
+						{activeWorkspace.name}
+					</span>
+				)}
+			</div>
 
 			<div className="flex items-center gap-3 h-full pr-4 shrink-0">
-				{!isSidebarMode && (
-					<WorkspaceControls
-						workspaceId={activeWorkspace?.id}
-						worktreePath={activeWorkspace?.worktreePath}
-					/>
-				)}
 				<AvatarDropdown />
 				{!isMac && <WindowControls />}
 			</div>
