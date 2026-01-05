@@ -11,6 +11,10 @@ import {
 
 export function WorkspaceSidebarControl() {
 	const { isOpen, toggleOpen } = useWorkspaceSidebarStore();
+	const hotkeyDisplay = formatHotkeyDisplay(
+		getHotkey("TOGGLE_WORKSPACE_SIDEBAR"),
+		getCurrentPlatform(),
+	);
 
 	return (
 		<Tooltip>
@@ -33,10 +37,7 @@ export function WorkspaceSidebarControl() {
 				<span className="flex items-center gap-2">
 					Toggle Workspaces
 					<KbdGroup>
-						{formatHotkeyDisplay(
-							getHotkey("TOGGLE_WORKSPACE_SIDEBAR"),
-							getCurrentPlatform(),
-						).map((key) => (
+						{hotkeyDisplay.map((key) => (
 							<Kbd key={key}>{key}</Kbd>
 						))}
 					</KbdGroup>

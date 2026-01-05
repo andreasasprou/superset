@@ -28,6 +28,7 @@ interface Workspace {
 interface ProjectSectionProps {
 	projectId: string;
 	projectName: string;
+	projectColor: string;
 	workspaces: Workspace[];
 	activeWorkspaceId: string | null;
 	/** Base index for keyboard shortcuts (0-based) */
@@ -37,6 +38,7 @@ interface ProjectSectionProps {
 export function ProjectSection({
 	projectId,
 	projectName,
+	projectColor,
 	workspaces,
 	activeWorkspaceId,
 	shortcutBaseIndex,
@@ -68,6 +70,7 @@ export function ProjectSection({
 		<div className="border-b border-border last:border-b-0">
 			<ProjectHeader
 				projectName={projectName}
+				projectColor={projectColor}
 				isCollapsed={isCollapsed}
 				onToggleCollapse={() => toggleProjectCollapsed(projectId)}
 				workspaceCount={workspaces.length}

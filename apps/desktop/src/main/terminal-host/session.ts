@@ -99,7 +99,6 @@ export class Session {
 	// Promise that resolves when PTY is ready to accept writes
 	private ptyReadyPromise: Promise<void>;
 	private ptyReadyResolve: (() => void) | null = null;
-	private ptyPid: number | null = null;
 
 	private emulatorWriteQueue: string[] = [];
 	private emulatorWriteQueuedBytes = 0;
@@ -265,7 +264,7 @@ export class Session {
 				break;
 
 			case PtySubprocessIpcType.Spawned:
-				this.ptyPid = payload.length >= 4 ? payload.readUInt32LE(0) : null;
+				// PTY PID available in payload if needed: payload.readUInt32LE(0)
 				// Resolve the ready promise so callers can await PTY readiness
 				if (this.ptyReadyResolve) {
 					this.ptyReadyResolve();

@@ -5,6 +5,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { HiMiniCommandLine, HiMiniXMark } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
+import {
+	getStatusTooltip,
+	StatusIndicator,
+} from "renderer/screens/main/components/StatusIndicator";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import type { Tab } from "renderer/stores/tabs/types";
 import { getTabDisplayName } from "renderer/stores/tabs/utils";
@@ -31,9 +35,15 @@ export function TabItem({ tab, index, isActive }: TabItemProps) {
 	const setActiveTab = useTabsStore((s) => s.setActiveTab);
 	const renameTab = useTabsStore((s) => s.renameTab);
 	const panes = useTabsStore((s) => s.panes);
-	const needsAttention = useTabsStore((s) =>
-		Object.values(s.panes).some((p) => p.tabId === tab.id && p.needsAttention),
-	);
+
+	// Derive aggregate status from panes in this tab (priority: permission > working > review)
+	const aggregateStatus = useTabsStore((s) => {
+		const tabPanes = Object.values(s.panes).filter((p) => p.tabId === tab.id);
+		if (tabPanes.some((p) => p.status === "permission")) return "permission";
+		if (tabPanes.some((p) => p.status === "working")) return "working";
+		if (tabPanes.some((p) => p.status === "review")) return "review";
+		return null;
+	});
 
 	const paneCount = useMemo(
 		() => Object.values(panes).filter((p) => p.tabId === tab.id).length,
@@ -190,15 +200,17 @@ export function TabItem({ tab, index, isActive }: TabItemProps) {
 						<HiMiniCommandLine className="size-4" />
 						<div className="flex items-center gap-1 flex-1 min-w-0">
 							<span className="truncate flex-1">{displayName}</span>
-							{needsAttention && (
+							{aggregateStatus && (
 								<Tooltip>
 									<TooltipTrigger asChild>
-										<span className="relative flex size-2 shrink-0 ml-1">
-											<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-											<span className="relative inline-flex size-2 rounded-full bg-red-500" />
-										</span>
+										<StatusIndicator
+											status={aggregateStatus}
+											className="ml-1"
+										/>
 									</TooltipTrigger>
-									<TooltipContent side="right">Agent completed</TooltipContent>
+									<TooltipContent side="right">
+										{getStatusTooltip(aggregateStatus)}
+									</TooltipContent>
 								</Tooltip>
 							)}
 						</div>
