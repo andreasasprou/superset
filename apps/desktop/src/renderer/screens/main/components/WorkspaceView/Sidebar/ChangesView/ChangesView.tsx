@@ -6,7 +6,7 @@ import { HiMiniMinus, HiMiniPlus } from "react-icons/hi2";
 import { trpc } from "renderer/lib/trpc";
 import { useChangesStore } from "renderer/stores/changes";
 import type { ChangeCategory, ChangedFile } from "shared/changes-types";
-import { PortsList } from "../TabsView/PortsList";
+
 import { CategorySection } from "./components/CategorySection";
 import { ChangesHeader } from "./components/ChangesHeader";
 import { CommitInput } from "./components/CommitInput";
@@ -360,8 +360,6 @@ export function ChangesView({ onFileOpen }: ChangesViewProps) {
 					</CategorySection>
 				</div>
 			)}
-
-			<PortsList />
 		</div>
 	);
 }
