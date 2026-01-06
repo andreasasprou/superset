@@ -384,6 +384,23 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 				commandBufferRef.current = commandBufferRef.current.slice(0, -1);
 			} else if (domEvent.key === "c" && domEvent.ctrlKey) {
 				commandBufferRef.current = "";
+				// Ctrl+C interrupts agent - clear working/permission status
+				const currentPane = useTabsStore.getState().panes[paneId];
+				if (
+					currentPane?.status === "working" ||
+					currentPane?.status === "permission"
+				) {
+					useTabsStore.getState().setPaneStatus(paneId, "idle");
+				}
+			} else if (domEvent.key === "Escape") {
+				// ESC interrupts agent (e.g., Claude Code "stop generating") - clear status
+				const currentPane = useTabsStore.getState().panes[paneId];
+				if (
+					currentPane?.status === "working" ||
+					currentPane?.status === "permission"
+				) {
+					useTabsStore.getState().setPaneStatus(paneId, "idle");
+				}
 			} else if (
 				domEvent.key.length === 1 &&
 				!domEvent.ctrlKey &&
