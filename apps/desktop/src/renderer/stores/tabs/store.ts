@@ -524,7 +524,8 @@ export const useTabsStore = create<TabsStore>()(
 
 				markPaneAsUsed: (paneId) => {
 					set((state) => {
-						// Guard: no-op for unknown panes to avoid corrupting panes map
+						// Guard: pane may be deleted while async processes (e.g., Claude Code)
+						// still have references. Don't create undefined entry - just no-op.
 						if (!state.panes[paneId]) return state;
 						return {
 							panes: {
@@ -537,7 +538,8 @@ export const useTabsStore = create<TabsStore>()(
 
 				setPaneStatus: (paneId, status) => {
 					const state = get();
-					// Guard: no-op for unknown panes to avoid corrupting panes map with undefined
+					// Guard: pane may be deleted while async processes (e.g., Claude Code)
+					// still have references. Don't create undefined entry - just no-op.
 					if (!state.panes[paneId]) return;
 
 					set({
@@ -545,6 +547,20 @@ export const useTabsStore = create<TabsStore>()(
 							...state.panes,
 							[paneId]: { ...state.panes[paneId], status },
 						},
+					});
+				},
+
+				setNeedsAttention: (paneId, needsAttention) => {
+					set((state) => {
+						// Guard: pane may be deleted while async processes (e.g., Claude Code)
+						// still have references. Don't create undefined entry - just no-op.
+						if (!state.panes[paneId]) return state;
+						return {
+							panes: {
+								...state.panes,
+								[paneId]: { ...state.panes[paneId], needsAttention },
+							},
+						};
 					});
 				},
 
@@ -584,7 +600,8 @@ export const useTabsStore = create<TabsStore>()(
 
 				updatePaneCwd: (paneId, cwd, confirmed) => {
 					set((state) => {
-						// Guard: no-op for unknown panes to avoid corrupting panes map
+						// Guard: pane may be deleted while async processes (e.g., Claude Code)
+						// still have references. Don't create undefined entry - just no-op.
 						if (!state.panes[paneId]) return state;
 						return {
 							panes: {
@@ -601,7 +618,8 @@ export const useTabsStore = create<TabsStore>()(
 
 				clearPaneInitialData: (paneId) => {
 					set((state) => {
-						// Guard: no-op for unknown panes to avoid corrupting panes map
+						// Guard: pane may be deleted while async processes (e.g., Claude Code)
+						// still have references. Don't create undefined entry - just no-op.
 						if (!state.panes[paneId]) return state;
 						return {
 							panes: {
