@@ -11,7 +11,7 @@ import { observable } from "@trpc/server/observable";
 import { and, desc, eq, isNotNull, not } from "drizzle-orm";
 import { track } from "main/lib/analytics";
 import { localDb } from "main/lib/local-db";
-import { terminalManager } from "main/lib/terminal";
+import { getActiveTerminalManager } from "main/lib/terminal";
 import { workspaceInitManager } from "main/lib/workspace-init-manager";
 import { SUPERSET_DIR_NAME, WORKTREES_DIR_NAME } from "shared/constants";
 import type { WorkspaceInitProgress } from "shared/types/workspace-init";
@@ -750,7 +750,7 @@ export const createWorkspacesRouter = () => {
 				await safeCheckoutBranch(project.mainRepoPath, input.branch);
 
 				// Send newline to terminals so their prompts refresh with new branch
-				terminalManager.refreshPromptsForWorkspace(workspace.id);
+				getActiveTerminalManager().refreshPromptsForWorkspace(workspace.id);
 
 				// Update the workspace - name is always the branch for branch workspaces
 				const now = Date.now();
@@ -1038,7 +1038,7 @@ export const createWorkspacesRouter = () => {
 				}
 
 				const activeTerminalCount =
-					terminalManager.getSessionCountByWorkspaceId(input.id);
+					await getActiveTerminalManager().getSessionCountByWorkspaceId(input.id);
 
 				// Branch workspaces are non-destructive to close - no git checks needed
 				if (workspace.type === "branch") {
@@ -1163,7 +1163,7 @@ export const createWorkspacesRouter = () => {
 				}
 
 				// Kill all terminal processes in this workspace first
-				const terminalResult = await terminalManager.killByWorkspaceId(
+				const terminalResult = await getActiveTerminalManager().killByWorkspaceId(
 					input.id,
 				);
 
@@ -1696,7 +1696,7 @@ export const createWorkspacesRouter = () => {
 					throw new Error("Workspace not found");
 				}
 
-				const terminalResult = await terminalManager.killByWorkspaceId(
+				const terminalResult = await getActiveTerminalManager().killByWorkspaceId(
 					input.id,
 				);
 
