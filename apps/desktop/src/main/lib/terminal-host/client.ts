@@ -13,6 +13,8 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
+	chmodSync,
+	closeSync,
 	existsSync,
 	mkdirSync,
 	openSync,
@@ -856,6 +858,11 @@ export class TerminalHostClient extends EventEmitter {
 			if (!existsSync(SUPERSET_HOME_DIR)) {
 				mkdirSync(SUPERSET_HOME_DIR, { recursive: true, mode: 0o700 });
 			}
+			try {
+				chmodSync(SUPERSET_HOME_DIR, 0o700);
+			} catch {
+				// Best-effort.
+			}
 
 			// Check if lock exists and is recent (within timeout)
 			if (existsSync(SPAWN_LOCK_PATH)) {
@@ -968,7 +975,12 @@ export class TerminalHostClient extends EventEmitter {
 			const logPath = join(SUPERSET_HOME_DIR, "daemon.log");
 			let logFd: number;
 			try {
-				logFd = openSync(logPath, "a");
+				logFd = openSync(logPath, "a", 0o600);
+				try {
+					chmodSync(logPath, 0o600);
+				} catch {
+					// Best-effort.
+				}
 			} catch (error) {
 				console.warn(
 					`[TerminalHostClient] Failed to open daemon log file: ${error}`,
@@ -978,15 +990,30 @@ export class TerminalHostClient extends EventEmitter {
 			}
 
 			// Spawn daemon as detached process
-			const child = spawn(process.execPath, [daemonScript], {
-				detached: true,
-				stdio: logFd >= 0 ? ["ignore", logFd, logFd] : "ignore",
-				env: {
-					...process.env,
-					ELECTRON_RUN_AS_NODE: "1",
-					NODE_ENV: process.env.NODE_ENV,
-				},
-			});
+			let child: ReturnType<typeof spawn> | null = null;
+			try {
+				child = spawn(process.execPath, [daemonScript], {
+					detached: true,
+					stdio: logFd >= 0 ? ["ignore", logFd, logFd] : "ignore",
+					env: {
+						...process.env,
+						ELECTRON_RUN_AS_NODE: "1",
+						NODE_ENV: process.env.NODE_ENV,
+					},
+				});
+			} finally {
+				if (logFd >= 0) {
+					try {
+						closeSync(logFd);
+					} catch {
+						// Best-effort.
+					}
+				}
+			}
+
+			if (!child) {
+				throw new Error("Failed to spawn daemon");
+			}
 
 			if (DEBUG_CLIENT) {
 				console.log(
