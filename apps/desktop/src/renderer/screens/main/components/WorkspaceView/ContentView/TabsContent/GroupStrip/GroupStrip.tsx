@@ -24,10 +24,7 @@ import { trpc } from "renderer/lib/trpc";
 import { usePresets } from "renderer/react-query/presets";
 import { useOpenSettings } from "renderer/stores";
 import { useTabsStore } from "renderer/stores/tabs/store";
-import {
-	pickHigherStatus,
-	type ActivePaneStatus,
-} from "shared/tabs-types";
+import { type ActivePaneStatus, pickHigherStatus } from "shared/tabs-types";
 import { GroupItem } from "./GroupItem";
 
 export function GroupStrip() {
