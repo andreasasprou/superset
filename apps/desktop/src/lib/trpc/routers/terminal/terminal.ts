@@ -10,6 +10,8 @@ import { publicProcedure, router } from "../..";
 import { getWorkspacePath } from "../workspaces/utils/worktree";
 import { resolveCwd } from "./utils";
 
+const DEBUG_TERMINAL = process.env.SUPERSET_TERMINAL_DEBUG === "1";
+
 /**
  * Terminal router using TerminalManager with node-pty
  * Sessions are keyed by paneId and linked to workspaces for cwd resolution
@@ -27,10 +29,12 @@ import { resolveCwd } from "./utils";
 export const createTerminalRouter = () => {
 	// Get the active terminal manager (in-process or daemon-based)
 	const terminalManager = getActiveTerminalManager();
-	console.log(
-		"[Terminal Router] Using terminal manager:",
-		terminalManager.constructor.name,
-	);
+	if (DEBUG_TERMINAL) {
+		console.log(
+			"[Terminal Router] Using terminal manager:",
+			terminalManager.constructor.name,
+		);
+	}
 
 	return router({
 		createOrAttach: publicProcedure
@@ -69,16 +73,17 @@ export const createTerminalRouter = () => {
 					: undefined;
 				const cwd = resolveCwd(cwdOverride, workspacePath);
 
-				// Debug: Log terminal creation parameters
-				console.log("[Terminal Router] createOrAttach called:", {
-					paneId,
-					workspaceId,
-					workspacePath,
-					cwdOverride,
-					resolvedCwd: cwd,
-					cols,
-					rows,
-				});
+				if (DEBUG_TERMINAL) {
+					console.log("[Terminal Router] createOrAttach called:", {
+						paneId,
+						workspaceId,
+						workspacePath,
+						cwdOverride,
+						resolvedCwd: cwd,
+						cols,
+						rows,
+					});
+				}
 
 				// Get project info for environment variables
 				const project = workspace
@@ -104,11 +109,13 @@ export const createTerminalRouter = () => {
 						skipColdRestore,
 					});
 
-					console.log("[Terminal Router] createOrAttach result:", {
-						paneId,
-						isNew: result.isNew,
-						wasRecovered: result.wasRecovered,
-					});
+					if (DEBUG_TERMINAL) {
+						console.log("[Terminal Router] createOrAttach result:", {
+							paneId,
+							isNew: result.isNew,
+							wasRecovered: result.wasRecovered,
+						});
+					}
 
 					return {
 						paneId,
