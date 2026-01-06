@@ -12,7 +12,7 @@ import {
 export const WRAPPER_MARKER = "# Superset agent-wrapper v1";
 export const CLAUDE_SETTINGS_FILE = "claude-settings.json";
 export const OPENCODE_PLUGIN_FILE = "superset-notify.js";
-export const OPENCODE_PLUGIN_MARKER = "// Superset opencode plugin v6";
+export const OPENCODE_PLUGIN_MARKER = "// Superset opencode plugin v7";
 
 const REAL_BINARY_RESOLVER = `find_real_binary() {
   local name="$1"
@@ -165,8 +165,8 @@ export function getOpenCodePluginContent(notifyPath: string): string {
 		" * @see https://github.com/sst/opencode/blob/dev/packages/app/src/context/notification.tsx",
 		" */",
 		"export const SupersetNotifyPlugin = async ({ $, client }) => {",
-		"  if (globalThis.__supersetOpencodeNotifyPluginV6) return {};",
-		"  globalThis.__supersetOpencodeNotifyPluginV6 = true;",
+		"  if (globalThis.__supersetOpencodeNotifyPluginV7) return {};",
+		"  globalThis.__supersetOpencodeNotifyPluginV7 = true;",
 		"",
 		"  // Only run inside a Superset terminal session",
 		"  if (!process?.env?.SUPERSET_TAB_ID) return {};",
@@ -219,8 +219,14 @@ export function getOpenCodePluginContent(notifyPath: string): string {
 		"    event: async ({ event }) => {",
 		"      const sessionID = event.properties?.sessionID;",
 		"",
+		"      // Debug: log all session events to understand what OpenCode emits",
+		'      if (event.type?.startsWith("session.")) {',
+		'        console.log("[superset-plugin] Event:", event.type, "props:", JSON.stringify(event.properties));',
+		"      }",
+		"",
 		"      // Skip notifications for child/subagent sessions",
 		"      if (await isChildSession(sessionID)) {",
+		'        console.log("[superset-plugin] Skipping child session:", sessionID);',
 		"        return;",
 		"      }",
 		"",
@@ -228,20 +234,25 @@ export function getOpenCodePluginContent(notifyPath: string): string {
 		"      // This is the primary event for status transitions",
 		'      if (event.type === "session.status") {',
 		"        const status = event.properties?.status;",
+		'        console.log("[superset-plugin] session.status - status object:", JSON.stringify(status));',
 		'        if (status?.type === "busy") {',
+		'          console.log("[superset-plugin] Detected BUSY, sending Start");',
 		'          await notify("Start");',
 		'        } else if (status?.type === "idle") {',
+		'          console.log("[superset-plugin] Detected IDLE, sending Stop");',
 		'          await notify("Stop");',
 		"        }",
 		"      }",
 		"",
 		"      // Handle deprecated session.idle event (backwards compatibility)",
 		'      if (event.type === "session.idle") {',
+		'        console.log("[superset-plugin] Detected session.idle event, sending Stop");',
 		'        await notify("Stop");',
 		"      }",
 		"",
 		"      // Handle session errors (also means session stopped)",
 		'      if (event.type === "session.error") {',
+		'        console.log("[superset-plugin] Detected session.error, sending Stop");',
 		'        await notify("Stop");',
 		"      }",
 		"    },",
