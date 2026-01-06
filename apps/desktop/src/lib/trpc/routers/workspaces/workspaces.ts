@@ -1038,7 +1038,9 @@ export const createWorkspacesRouter = () => {
 				}
 
 				const activeTerminalCount =
-					await getActiveTerminalManager().getSessionCountByWorkspaceId(input.id);
+					await getActiveTerminalManager().getSessionCountByWorkspaceId(
+						input.id,
+					);
 
 				// Branch workspaces are non-destructive to close - no git checks needed
 				if (workspace.type === "branch") {
@@ -1163,9 +1165,8 @@ export const createWorkspacesRouter = () => {
 				}
 
 				// Kill all terminal processes in this workspace first
-				const terminalResult = await getActiveTerminalManager().killByWorkspaceId(
-					input.id,
-				);
+				const terminalResult =
+					await getActiveTerminalManager().killByWorkspaceId(input.id);
 
 				const project = localDb
 					.select()
@@ -1696,9 +1697,8 @@ export const createWorkspacesRouter = () => {
 					throw new Error("Workspace not found");
 				}
 
-				const terminalResult = await getActiveTerminalManager().killByWorkspaceId(
-					input.id,
-				);
+				const terminalResult =
+					await getActiveTerminalManager().killByWorkspaceId(input.id);
 
 				// Delete workspace record ONLY, keep worktree
 				localDb.delete(workspaces).where(eq(workspaces.id, input.id)).run();
