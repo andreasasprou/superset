@@ -550,20 +550,6 @@ export const useTabsStore = create<TabsStore>()(
 					});
 				},
 
-				setNeedsAttention: (paneId, needsAttention) => {
-					set((state) => {
-						// Guard: pane may be deleted while async processes (e.g., Claude Code)
-						// still have references. Don't create undefined entry - just no-op.
-						if (!state.panes[paneId]) return state;
-						return {
-							panes: {
-								...state.panes,
-								[paneId]: { ...state.panes[paneId], needsAttention },
-							},
-						};
-					});
-				},
-
 				clearWorkspaceAttentionStatus: (workspaceId) => {
 					const state = get();
 					const workspaceTabs = state.tabs.filter(
