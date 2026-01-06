@@ -18,7 +18,9 @@
 		"POSTHOG_API_KEY",
 		"POSTHOG_PROJECT_ID",
 		"KV_REST_API_URL",
-		"KV_REST_API_TOKEN"
+		"KV_REST_API_TOKEN",
+		"ELECTRIC_URL",
+		"ELECTRIC_SECRET"
 	],
 	"globalPassThroughEnv": [
 		"NODE_ENV",
