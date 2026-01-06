@@ -118,6 +118,7 @@ export default defineConfig({
 					"better-sqlite3", // Native module - must stay external
 					"node-pty", // Native module - must stay external
 					/^@sentry\/electron/,
+					/^@xterm\//, // xterm packages have incorrect exports for bundlers
 				],
 			},
 		},
