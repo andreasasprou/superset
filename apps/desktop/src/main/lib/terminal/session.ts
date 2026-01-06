@@ -9,6 +9,7 @@ import {
 import { HistoryReader, HistoryWriter } from "../terminal-history";
 import { buildTerminalEnv, FALLBACK_SHELL, getDefaultShell } from "./env";
 import { portManager } from "./port-manager";
+import { PtyWriteQueue } from "./pty-write-queue";
 import type { InternalCreateSessionParams, TerminalSession } from "./types";
 
 const DEFAULT_COLS = 80;
@@ -83,6 +84,16 @@ export async function createSession(
 	const terminalCols = cols || DEFAULT_COLS;
 	const terminalRows = rows || DEFAULT_ROWS;
 
+	// Debug: Log PTY spawn parameters
+	console.log("[Terminal Session] Creating session:", {
+		paneId,
+		shell,
+		workingDir,
+		terminalCols,
+		terminalRows,
+		useFallbackShell,
+	});
+
 	const env = buildTerminalEnv({
 		shell,
 		paneId,
@@ -122,6 +133,8 @@ export async function createSession(
 		onData(paneId, batchedData);
 	});
 
+	const writeQueue = new PtyWriteQueue(ptyProcess);
+
 	return {
 		pty: ptyProcess,
 		paneId,
@@ -135,6 +148,7 @@ export async function createSession(
 		wasRecovered,
 		historyWriter,
 		dataBatcher,
+		writeQueue,
 		shell,
 		startTime: Date.now(),
 		usedFallback: useFallbackShell,
@@ -186,7 +200,7 @@ export function setupDataHandler(
 						}
 
 						if (session.isAlive) {
-							session.pty.write(initialCommandString);
+							session.writeQueue.write(initialCommandString);
 						}
 					})();
 				}
