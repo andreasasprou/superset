@@ -15,7 +15,7 @@ import { Input } from "@superset/ui/input";
 import { toast } from "@superset/ui/sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
 import { cn } from "@superset/ui/utils";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useDrag, useDrop } from "react-dnd";
 import { HiMiniXMark } from "react-icons/hi2";
 import { LuEye, LuEyeOff, LuFolder, LuFolderGit2 } from "react-icons/lu";
@@ -26,6 +26,8 @@ import {
 	useWorkspaceDeleteHandler,
 } from "renderer/react-query/workspaces";
 import { useWorkspaceRename } from "renderer/screens/main/hooks/useWorkspaceRename";
+import { StatusIndicator } from "renderer/screens/main/components/StatusIndicator";
+import type { PaneStatus } from "shared/tabs-types";
 import { useCloseWorkspacesList } from "renderer/stores/app-state";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import { extractPaneIdsFromLayout } from "renderer/stores/tabs/utils";
@@ -115,12 +117,36 @@ export function WorkspaceListItem({
 	const workspacePaneIds = new Set(
 		workspaceTabs.flatMap((t) => extractPaneIdsFromLayout(t.layout)),
 	);
-	const hasPaneAttention = Object.values(panes)
-		.filter((p) => p != null && workspacePaneIds.has(p.id))
-		.some((p) => p.status && p.status !== "idle");
 
-	// Show indicator if workspace is manually marked as unread OR has pane-level attention
-	const needsAttention = isUnread || hasPaneAttention;
+	// Compute aggregate status for workspace (priority: permission > working > review)
+	const workspaceStatus = useMemo((): Exclude<PaneStatus, "idle"> | null => {
+		const workspacePanes = Object.values(panes).filter(
+			(p) => p != null && workspacePaneIds.has(p.id),
+		);
+
+		let hasWorking = false;
+		let hasReview = false;
+
+		for (const pane of workspacePanes) {
+			if (!pane.status || pane.status === "idle") continue;
+
+			if (pane.status === "permission") {
+				return "permission"; // Highest priority, return immediately
+			}
+			if (pane.status === "working") {
+				hasWorking = true;
+			} else if (pane.status === "review") {
+				hasReview = true;
+			}
+		}
+
+		if (hasWorking) return "working";
+		if (hasReview) return "review";
+		return null;
+	}, [panes, workspacePaneIds]);
+
+	// Show indicator if workspace is manually marked as unread OR has pane-level status
+	const needsAttention = isUnread || workspaceStatus !== null;
 
 	const handleClick = () => {
 		if (!rename.isRenaming) {
@@ -216,11 +242,16 @@ export function WorkspaceListItem({
 						strokeWidth={STROKE_WIDTH}
 					/>
 				)}
-				{/* Notification dot */}
-				{needsAttention && (
+				{/* Status indicator */}
+				{workspaceStatus && (
+					<span className="absolute top-1 right-1">
+						<StatusIndicator status={workspaceStatus} />
+					</span>
+				)}
+				{/* Unread dot (only when no status) */}
+				{isUnread && !workspaceStatus && (
 					<span className="absolute top-1 right-1 flex size-2">
-						<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-						<span className="relative inline-flex size-2 rounded-full bg-red-500" />
+						<span className="relative inline-flex size-2 rounded-full bg-blue-500" />
 					</span>
 				)}
 			</button>
@@ -297,7 +328,7 @@ export function WorkspaceListItem({
 				<div className="absolute left-0 top-1.5 bottom-1.5 w-0.5 bg-primary rounded-r" />
 			)}
 
-			{/* Icon with notification dot */}
+			{/* Icon with status indicator */}
 			<Tooltip delayDuration={500}>
 				<TooltipTrigger asChild>
 					<div className="relative shrink-0 size-5 flex items-center justify-center mr-2.5">
@@ -312,10 +343,14 @@ export function WorkspaceListItem({
 								strokeWidth={STROKE_WIDTH}
 							/>
 						)}
-						{needsAttention && (
+						{workspaceStatus && (
+							<span className="absolute -top-0.5 -right-0.5">
+								<StatusIndicator status={workspaceStatus} />
+							</span>
+						)}
+						{isUnread && !workspaceStatus && (
 							<span className="absolute -top-0.5 -right-0.5 flex size-2">
-								<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-								<span className="relative inline-flex size-2 rounded-full bg-red-500" />
+								<span className="relative inline-flex size-2 rounded-full bg-blue-500" />
 							</span>
 						)}
 					</div>
