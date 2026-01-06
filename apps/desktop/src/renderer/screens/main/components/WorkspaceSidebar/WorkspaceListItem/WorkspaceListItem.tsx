@@ -25,12 +25,12 @@ import {
 	useSetActiveWorkspace,
 	useWorkspaceDeleteHandler,
 } from "renderer/react-query/workspaces";
-import { useWorkspaceRename } from "renderer/screens/main/hooks/useWorkspaceRename";
 import { StatusIndicator } from "renderer/screens/main/components/StatusIndicator";
-import type { PaneStatus } from "shared/tabs-types";
+import { useWorkspaceRename } from "renderer/screens/main/hooks/useWorkspaceRename";
 import { useCloseWorkspacesList } from "renderer/stores/app-state";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import { extractPaneIdsFromLayout } from "renderer/stores/tabs/utils";
+import type { PaneStatus } from "shared/tabs-types";
 import { STROKE_WIDTH } from "../constants";
 import {
 	BranchSwitcher,
@@ -144,9 +144,6 @@ export function WorkspaceListItem({
 		if (hasReview) return "review";
 		return null;
 	}, [panes, workspacePaneIds]);
-
-	// Show indicator if workspace is manually marked as unread OR has pane-level status
-	const needsAttention = isUnread || workspaceStatus !== null;
 
 	const handleClick = () => {
 		if (!rename.isRenaming) {

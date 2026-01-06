@@ -40,9 +40,7 @@ export function GroupItem({
 						<span className="text-sm whitespace-nowrap overflow-hidden flex-1 text-left">
 							{displayName}
 						</span>
-						{status && status !== "idle" && (
-							<StatusIndicator status={status} />
-						)}
+						{status && status !== "idle" && <StatusIndicator status={status} />}
 					</button>
 				</TooltipTrigger>
 				<TooltipContent side="bottom" sideOffset={4}>
