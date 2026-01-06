@@ -12,7 +12,7 @@ import {
 export const WRAPPER_MARKER = "# Superset agent-wrapper v1";
 export const CLAUDE_SETTINGS_FILE = "claude-settings.json";
 export const OPENCODE_PLUGIN_FILE = "superset-notify.js";
-export const OPENCODE_PLUGIN_MARKER = "// Superset opencode plugin v3";
+export const OPENCODE_PLUGIN_MARKER = "// Superset opencode plugin v8";
 
 const REAL_BINARY_RESOLVER = `find_real_binary() {
   local name="$1"
@@ -72,6 +72,7 @@ export function getOpenCodeGlobalPluginPath(): string {
 export function getClaudeSettingsContent(notifyPath: string): string {
 	const settings = {
 		hooks: {
+			UserPromptSubmit: [{ hooks: [{ type: "command", command: notifyPath }] }],
 			Stop: [{ hooks: [{ type: "command", command: notifyPath }] }],
 			PermissionRequest: [
 				{ matcher: "*", hooks: [{ type: "command", command: notifyPath }] },
@@ -144,33 +145,43 @@ export function getOpenCodePluginContent(notifyPath: string): string {
 		" * Superset Notification Plugin for OpenCode",
 		" *",
 		" * This plugin sends desktop notifications when OpenCode sessions need attention.",
-		" * It hooks into session.idle, session.error, and permission.ask events.",
+		" * It hooks into session.status (busy/idle), session.idle, session.error, and permission.ask events.",
 		" *",
-		" * IMPORTANT: Subagent/Background Task Filtering",
-		" * --------------------------------------------",
+		" * ROBUSTNESS FEATURES (v8):",
+		" * - Session-scoped: Tracks root sessionID, ignores events from other sessions",
+		" * - Deduplication: Only sends Start on idle→busy, Stop on busy→idle transitions",
+		" * - Safe defaults: On error, assumes child session to avoid false positives",
+		" * - Debug logging: Set SUPERSET_DEBUG=1 to enable verbose logging",
+		" *",
+		" * SUBAGENT FILTERING:",
 		" * When using oh-my-opencode or similar tools that spawn background subagents",
 		" * (e.g., explore, librarian, oracle agents), each subagent runs in its own",
 		" * OpenCode session. These child sessions emit session.idle events when they",
 		" * complete, which would cause excessive notifications if not filtered.",
 		" *",
-		" * How we detect child sessions:",
-		" * - OpenCode sessions have a `parentID` field when they are subagent sessions",
-		" * - Main/root sessions have `parentID` as undefined",
-		" * - We use client.session.list() to look up the session and check parentID",
-		" *",
-		" * Reference: OpenCode's own notification handling in packages/app/src/context/notification.tsx",
-		" * uses the same approach to filter out child session notifications.",
+		" * We detect child sessions by checking the `parentID` field - main/root sessions",
+		" * have `parentID` as undefined, while child sessions have it set.",
 		" *",
 		" * @see https://github.com/sst/opencode/blob/dev/packages/app/src/context/notification.tsx",
 		" */",
 		"export const SupersetNotifyPlugin = async ({ $, client }) => {",
-		"  if (globalThis.__supersetOpencodeNotifyPluginV3) return {};",
-		"  globalThis.__supersetOpencodeNotifyPluginV3 = true;",
+		"  if (globalThis.__supersetOpencodeNotifyPluginV8) return {};",
+		"  globalThis.__supersetOpencodeNotifyPluginV8 = true;",
 		"",
 		"  // Only run inside a Superset terminal session",
 		"  if (!process?.env?.SUPERSET_TAB_ID) return {};",
 		"",
 		`  const notifyPath = "${notifyPath}";`,
+		"  const debug = process?.env?.SUPERSET_DEBUG === '1';",
+		"",
+		"  // State tracking for deduplication and session-scoping",
+		"  let currentState = 'idle'; // 'idle' | 'busy'",
+		"  let rootSessionID = null;  // The session we're tracking (first busy session)",
+		"  let stopSent = false;      // Prevent duplicate Stop notifications",
+		"",
+		"  const log = (...args) => {",
+		"    if (debug) console.log('[superset-plugin]', ...args);",
+		"  };",
 		"",
 		"  /**",
 		"   * Sends a notification to Superset's notification server.",
@@ -178,55 +189,135 @@ export function getOpenCodePluginContent(notifyPath: string): string {
 		"   */",
 		"  const notify = async (hookEventName) => {",
 		"    const payload = JSON.stringify({ hook_event_name: hookEventName });",
+		"    log('Sending notification:', hookEventName);",
 		"    try {",
 		shellLine,
-		"    } catch {",
-		"      // Best-effort only; do not break the agent if notification fails",
+		"      log('Notification sent successfully');",
+		"    } catch (err) {",
+		"      log('Notification failed:', err?.message || err);",
 		"    }",
 		"  };",
 		"",
 		"  /**",
 		"   * Checks if a session is a child/subagent session by looking up its parentID.",
+		"   * Uses caching to avoid repeated lookups for the same session.",
 		"   *",
-		"   * Background: When oh-my-opencode spawns background agents (explore, librarian, etc.),",
-		"   * each agent runs in a separate OpenCode session with a parentID pointing to the",
-		"   * main session. We only want to notify for main sessions, not subagent completions.",
-		"   *",
-		"   * Implementation notes:",
-		"   * - Uses client.session.list() because it reliably returns parentID",
-		"   * - session.get() has parameter issues in some SDK versions",
-		"   * - This is a local RPC call (~10ms), acceptable for infrequent notification events",
-		"   * - On error, returns false (assumes main session) to avoid missing notifications",
-		"   *",
-		"   * @param sessionID - The session ID from the event",
-		"   * @returns true if this is a child/subagent session, false if main session",
+		"   * IMPORTANT: On error, returns TRUE (assumes child) to avoid false positives.",
+		"   * This prevents race conditions where a failed lookup causes child session",
+		"   * events to be treated as root session events.",
 		"   */",
+		"  const childSessionCache = new Map();",
 		"  const isChildSession = async (sessionID) => {",
-		"    if (!sessionID || !client?.session?.list) return false;",
+		"    if (!sessionID) return true; // No sessionID = can't verify, skip",
+		"    if (!client?.session?.list) return true; // Can't check, skip",
+		"",
+		"    // Check cache first",
+		"    if (childSessionCache.has(sessionID)) {",
+		"      return childSessionCache.get(sessionID);",
+		"    }",
+		"",
 		"    try {",
 		"      const sessions = await client.session.list();",
 		"      const session = sessions.data?.find((s) => s.id === sessionID);",
-		"      // Sessions with parentID are child/subagent sessions",
-		"      return !!session?.parentID;",
-		"    } catch {",
-		"      // On error, assume it's a main session to avoid missing notifications",
-		"      return false;",
+		"      const isChild = !!session?.parentID;",
+		"      childSessionCache.set(sessionID, isChild);",
+		"      log('Session lookup:', sessionID, 'isChild:', isChild);",
+		"      return isChild;",
+		"    } catch (err) {",
+		"      log('Session lookup failed:', err?.message || err, '- assuming child');",
+		"      // On error, assume child session to avoid false positives",
+		"      // This prevents race conditions where failures cause incorrect notifications",
+		"      return true;",
+		"    }",
+		"  };",
+		"",
+		"  /**",
+		"   * Handles state transition to busy.",
+		"   * Only sends Start if transitioning from idle and session matches root.",
+		"   */",
+		"  const handleBusy = async (sessionID) => {",
+		"    // If we don't have a root session yet, this becomes our root",
+		"    if (!rootSessionID) {",
+		"      rootSessionID = sessionID;",
+		"      log('Root session set:', rootSessionID);",
+		"    }",
+		"",
+		"    // Only process events for our root session",
+		"    if (sessionID !== rootSessionID) {",
+		"      log('Ignoring busy from non-root session:', sessionID);",
+		"      return;",
+		"    }",
+		"",
+		"    // Only send Start if transitioning from idle",
+		"    if (currentState === 'idle') {",
+		"      currentState = 'busy';",
+		"      stopSent = false; // Reset stop flag for new busy period",
+		"      await notify('Start');",
+		"    } else {",
+		"      log('Already busy, skipping Start');",
+		"    }",
+		"  };",
+		"",
+		"  /**",
+		"   * Handles state transition to idle/stopped.",
+		"   * Only sends Stop once per busy period and only for root session.",
+		"   * Resets rootSessionID after Stop so we can track new sessions.",
+		"   */",
+		"  const handleStop = async (sessionID, reason) => {",
+		"    // Only process events for our root session (if we have one)",
+		"    if (rootSessionID && sessionID !== rootSessionID) {",
+		"      log('Ignoring stop from non-root session:', sessionID, 'reason:', reason);",
+		"      return;",
+		"    }",
+		"",
+		"    // Only send Stop if we're busy and haven't already sent Stop",
+		"    if (currentState === 'busy' && !stopSent) {",
+		"      currentState = 'idle';",
+		"      stopSent = true;",
+		"      log('Stopping, reason:', reason);",
+		"      await notify('Stop');",
+		"      // Reset rootSessionID so we can track a new session if OpenCode starts another conversation",
+		"      rootSessionID = null;",
+		"      log('Reset rootSessionID for next session');",
+		"    } else {",
+		"      log('Skipping Stop - state:', currentState, 'stopSent:', stopSent, 'reason:', reason);",
 		"    }",
 		"  };",
 		"",
 		"  return {",
 		"    event: async ({ event }) => {",
-		"      // Handle session completion events",
-		'      if (event.type === "session.idle" || event.type === "session.error") {',
-		"        const sessionID = event.properties?.sessionID;",
+		"      const sessionID = event.properties?.sessionID;",
+		"      log('Event:', event.type, 'sessionID:', sessionID);",
 		"",
-		"        // Skip notifications for child/subagent sessions",
-		"        // This prevents notification spam when background agents complete",
-		"        if (await isChildSession(sessionID)) {",
-		"          return;",
+		"      // Skip notifications for child/subagent sessions",
+		"      if (await isChildSession(sessionID)) {",
+		"        log('Skipping child session');",
+		"        return;",
+		"      }",
+		"",
+		"      // Handle session status changes (busy/idle/retry)",
+		'      if (event.type === "session.status") {',
+		"        const status = event.properties?.status;",
+		"        log('Status:', status?.type);",
+		'        if (status?.type === "busy") {',
+		"          await handleBusy(sessionID);",
+		'        } else if (status?.type === "idle") {',
+		"          await handleStop(sessionID, 'session.status.idle');",
 		"        }",
+		"      }",
 		"",
-		'        await notify("Stop");',
+		"      // Handle deprecated/alternative event types (backwards compatibility)",
+		"      // Some OpenCode versions may emit session.busy/session.idle as separate events",
+		'      if (event.type === "session.busy") {',
+		"        await handleBusy(sessionID);",
+		"      }",
+		'      if (event.type === "session.idle") {',
+		"        await handleStop(sessionID, 'session.idle');",
+		"      }",
+		"",
+		"      // Handle session errors (also means session stopped)",
+		'      if (event.type === "session.error") {',
+		"        await handleStop(sessionID, 'session.error');",
 		"      }",
 		"    },",
 		'    "permission.ask": async (_permission, output) => {',
@@ -275,24 +366,43 @@ export function createCodexWrapper(): void {
 }
 
 /**
- * Creates OpenCode plugin file with notification hooks
+ * Creates OpenCode plugin file with notification hooks.
+ * Only writes to environment-specific path - NOT the global path.
+ * Global path causes dev/prod conflicts when both are running.
  */
 export function createOpenCodePlugin(): void {
 	const pluginPath = getOpenCodePluginPath();
 	const notifyPath = getNotifyScriptPath();
 	const content = getOpenCodePluginContent(notifyPath);
 	fs.writeFileSync(pluginPath, content, { mode: 0o644 });
+	console.log("[agent-setup] Created OpenCode plugin");
+}
+
+/**
+ * Cleans up stale global OpenCode plugin that may have been written by older versions.
+ * Only removes if the file contains our marker to avoid deleting user-installed plugins.
+ * This prevents dev/prod cross-talk when both environments are running.
+ */
+export function cleanupGlobalOpenCodePlugin(): void {
 	try {
 		const globalPluginPath = getOpenCodeGlobalPluginPath();
-		fs.mkdirSync(path.dirname(globalPluginPath), { recursive: true });
-		fs.writeFileSync(globalPluginPath, content, { mode: 0o644 });
+		if (!fs.existsSync(globalPluginPath)) return;
+
+		const content = fs.readFileSync(globalPluginPath, "utf-8");
+		// Check for any version of our marker (v1, v2, v3, v4, etc.)
+		if (content.includes("// Superset opencode plugin")) {
+			fs.unlinkSync(globalPluginPath);
+			console.log(
+				"[agent-setup] Removed stale global OpenCode plugin to prevent dev/prod conflicts",
+			);
+		}
 	} catch (error) {
+		// Ignore errors - this is best-effort cleanup
 		console.warn(
-			"[agent-setup] Failed to write global OpenCode plugin:",
+			"[agent-setup] Failed to cleanup global OpenCode plugin:",
 			error,
 		);
 	}
-	console.log("[agent-setup] Created OpenCode plugin");
 }
 
 /**
