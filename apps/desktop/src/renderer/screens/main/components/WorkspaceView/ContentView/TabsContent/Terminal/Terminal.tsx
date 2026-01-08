@@ -1193,6 +1193,10 @@ export const Terminal = ({
 			const detachTimeout = setTimeout(() => {
 				detachRef.current({ paneId });
 				pendingDetaches.delete(paneId);
+				// Clean up cold restore scrollback to prevent memory leak
+				// (scrollback can be MBs per pane, accumulates if not cleaned)
+				// Must be inside detachTimeout to survive StrictMode unmount/remount
+				coldRestoreState.delete(paneId);
 			}, 50);
 			pendingDetaches.set(paneId, detachTimeout);
 
@@ -1204,10 +1208,6 @@ export const Terminal = ({
 			modeScanBufferRef.current = "";
 			renderDisposableRef.current?.dispose();
 			renderDisposableRef.current = null;
-
-			// Clean up cold restore scrollback to prevent memory leak
-			// (scrollback can be MBs per pane, accumulates if not cleaned)
-			coldRestoreState.delete(paneId);
 
 			// Delay xterm.dispose() to let internal timeouts complete.
 			// xterm.open() schedules a setTimeout for Viewport.syncScrollArea.
