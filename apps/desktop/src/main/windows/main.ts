@@ -170,6 +170,20 @@ export async function MainWindow() {
 		},
 	);
 
+	// Forward low-volume terminal lifecycle events to the renderer via the existing
+	// notifications subscription. This is used only for correctness (e.g. clearing
+	// stuck agent lifecycle statuses when terminal panes aren't mounted).
+	getActiveTerminalManager().on(
+		"terminalExit",
+		(event: { paneId: string; exitCode: number; signal?: number }) => {
+			notificationsEmitter.emit(NOTIFICATION_EVENTS.TERMINAL_EXIT, {
+				paneId: event.paneId,
+				exitCode: event.exitCode,
+				signal: event.signal,
+			});
+		},
+	);
+
 	window.webContents.on("did-finish-load", async () => {
 		// Restore maximized state if it was saved
 		if (initialBounds.isMaximized) {

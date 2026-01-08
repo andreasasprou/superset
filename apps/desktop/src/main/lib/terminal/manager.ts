@@ -158,6 +158,7 @@ export class TerminalManager extends EventEmitter {
 			portManager.unregisterSession(paneId);
 
 			this.emit(`exit:${paneId}`, exitCode, signal);
+			this.emit("terminalExit", { paneId, exitCode, signal });
 
 			// Clean up session after delay
 			const timeout = setTimeout(() => {
@@ -431,7 +432,8 @@ export class TerminalManager extends EventEmitter {
 				name.startsWith("data:") ||
 				name.startsWith("exit:") ||
 				name.startsWith("disconnect:") ||
-				name.startsWith("error:")
+				name.startsWith("error:") ||
+				name === "terminalExit"
 			) {
 				this.removeAllListeners(event);
 			}

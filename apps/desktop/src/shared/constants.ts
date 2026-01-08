@@ -43,6 +43,7 @@ export const CONFIG_TEMPLATE = `{
 export const NOTIFICATION_EVENTS = {
 	AGENT_LIFECYCLE: "agent-lifecycle",
 	FOCUS_TAB: "focus-tab",
+	TERMINAL_EXIT: "terminal-exit",
 } as const;
 
 // Default user preference values

@@ -163,6 +163,7 @@ export function TabView({ tab, isTabVisible }: TabViewProps) {
 		[
 			tabPanes,
 			focusedPaneId,
+			isTabVisible,
 			tab.id,
 			tab.workspaceId,
 			worktreePath,

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { trpc } from "renderer/lib/trpc";
 import { useSidebarStore } from "renderer/stores";
 import {
@@ -12,6 +12,8 @@ import { ResizablePanel } from "../../../ResizablePanel";
 import { Sidebar } from "../../Sidebar";
 import { EmptyTabView } from "./EmptyTabView";
 import { TabView } from "./TabView";
+
+const WARM_TERMINAL_TAB_LIMIT = 8;
 
 /**
  * Check if a tab contains at least one terminal pane.
@@ -29,6 +31,7 @@ export function TabsContent() {
 	const activeWorkspaceId = activeWorkspace?.id;
 	const allTabs = useTabsStore((s) => s.tabs);
 	const activeTabIds = useTabsStore((s) => s.activeTabIds);
+	const panes = useTabsStore((s) => s.panes);
 
 	const {
 		isSidebarOpen,
@@ -55,22 +58,63 @@ export function TabsContent() {
 		return allTabs.find((tab) => tab.id === activeTabId) || null;
 	}, [activeTabId, allTabs]);
 
-	// When terminal persistence is enabled, keep terminal-containing tabs mounted
-	// across workspace/tab switches. This prevents TUI white screen issues by
-	// avoiding the unmount/remount cycle that requires complex reattach/rehydration.
+	const activeTabHasTerminal = useMemo(() => {
+		if (!tabToRender) return false;
+		return hasTerminalPane(tabToRender, panes);
+	}, [tabToRender, panes]);
+
+	// Per-run warm set of terminal tab IDs (MRU order). Not persisted.
+	const [warmTerminalTabIds, setWarmTerminalTabIds] = useState<string[]>([]);
+
+	// Track terminal tab visits to keep a bounded set mounted for smooth switching.
+	useEffect(() => {
+		if (!terminalPersistence) return;
+		if (!activeTabId) return;
+		if (!activeTabHasTerminal) return;
+
+		setWarmTerminalTabIds((prev) => {
+			const next = [activeTabId, ...prev.filter((id) => id !== activeTabId)];
+			return next.slice(0, WARM_TERMINAL_TAB_LIMIT);
+		});
+	}, [terminalPersistence, activeTabId, activeTabHasTerminal]);
+
+	// When terminal persistence is enabled, keep a bounded set of terminal tabs
+	// mounted across workspace/tab switches. This prevents TUI white screen issues
+	// for recently used terminals by avoiding the unmount/remount cycle that
+	// requires complex reattach/rehydration, while avoiding startup fan-out.
 	// Non-terminal tabs use normal unmount behavior to save memory.
 	// Uses visibility:hidden (not display:none) to preserve xterm dimensions.
 	if (terminalPersistence) {
-		// Partition tabs: terminal tabs stay mounted, non-terminal tabs unmount when inactive
+		// Partition tabs: a bounded set of terminal tabs stay mounted, non-terminal tabs unmount when inactive.
 		const terminalTabs = allTabs.filter((tab) => hasTerminalPane(tab, panes));
+		const terminalTabsById = new Map(terminalTabs.map((tab) => [tab.id, tab]));
+
+		const warmIdsFiltered = warmTerminalTabIds.filter((id) =>
+			terminalTabsById.has(id),
+		);
+
+		// Ensure active terminal tab is included in the mounted set even before the
+		// warm-set effect runs (first render after tab switch).
+		const terminalTabIdsToRender = (() => {
+			const ids = [...warmIdsFiltered];
+			if (activeTabHasTerminal && activeTabId && !ids.includes(activeTabId)) {
+				ids.unshift(activeTabId);
+			}
+			return ids.slice(0, WARM_TERMINAL_TAB_LIMIT);
+		})();
+
+		const terminalTabsToRender = terminalTabIdsToRender
+			.map((id) => terminalTabsById.get(id))
+			.filter((tab): tab is Tab => !!tab);
+
 		const activeNonTerminalTab =
-			tabToRender && !hasTerminalPane(tabToRender, panes) ? tabToRender : null;
+			tabToRender && !activeTabHasTerminal ? tabToRender : null;
 
 		return (
 			<div className="flex-1 min-h-0 flex overflow-hidden">
 				<div className="relative flex-1 min-w-0">
 					{/* Terminal tabs: keep mounted with visibility toggle */}
-					{terminalTabs.map((tab) => {
+					{terminalTabsToRender.map((tab) => {
 						const isVisible =
 							tab.workspaceId === activeWorkspaceId && tab.id === activeTabId;
 
@@ -90,7 +134,7 @@ export function TabsContent() {
 					{/* Active non-terminal tab: render normally (unmounts when switching) */}
 					{activeNonTerminalTab && (
 						<div className="absolute inset-0">
-							<TabView tab={activeNonTerminalTab} panes={panes} />
+							<TabView tab={activeNonTerminalTab} isTabVisible />
 						</div>
 					)}
 					{/* Fallback: show empty view without unmounting terminal tabs */}

@@ -16,6 +16,8 @@ On this branch, the daemon protocol was recently changed to split “control” 
 
 The observed freeze happens because the renderer mounts far more terminal UIs than the user can see, and each mounted terminal immediately calls `terminal.createOrAttach`, which in daemon mode can cause disk I/O, snapshot generation, and (when sessions are missing) new PTY spawns. When this happens tens of times concurrently, startup becomes unresponsive.
 
+Mount policy is therefore the primary lever for fixing the startup freeze. However, mount policy alone is not a complete robustness strategy: a single tab can still contain many terminal panes (splits), cold restore can otherwise spawn many shells quickly when sessions are missing, and future regressions could reintroduce large attach/spawn fan-out. This plan pairs the mount-policy fix with safety nets (concurrency limits, progressive attach) and clearer cold-restore semantics.
+
 
 ## Definitions (Plain Language)
 
@@ -153,6 +155,8 @@ Update `apps/desktop/src/renderer/screens/main/components/WorkspaceView/ContentV
 
 Implement the warm set as a global per-run LRU list (not persisted), so it improves common navigation during a session but does not re-introduce startup fan-out after restart. The warm set should be capped by a small constant (recommended default: 8).
 
+Note: This milestone addresses the bulk of the freeze by preventing “mount everything”. Milestones 2 and 4 are still required to prevent overload when a user opens a very heavy split tab or rapidly opens many new terminals.
+
 Concrete behavior:
 
     - Always render the active tab for the active workspace (current behavior).
@@ -260,6 +264,8 @@ This milestone bounds the daemon’s memory and process usage and gives the user
 Work:
 
 Add a daemon-side session inventory (list sessions + basic metadata like createdAt/lastAttachedAt/attachedClients) and expose it via tRPC so the renderer can display “how many sessions exist”. This PR should prefer manual recovery tools and warnings over automatic eviction.
+
+Clarification: to distinguish “a terminal is still running in the daemon” vs “only old scrollback exists on disk”, use daemon session existence (`listSessions` / “does this sessionId exist”) as the source of truth. A PTY PID is useful metadata to display for debugging and to support port-scanning, but it must not be treated as a stable identity for a session (PIDs change/reuse and do not survive daemon restarts).
 
 Implement user-facing recovery actions:
 

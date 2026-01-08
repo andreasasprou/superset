@@ -40,6 +40,7 @@ import {
 	type ResizeRequest,
 	type ShutdownRequest,
 	type TerminalErrorEvent,
+	type TerminalExitEvent,
 	type WriteRequest,
 } from "../lib/terminal-host/types";
 import { TerminalHost } from "./terminal-host";
@@ -193,6 +194,32 @@ const clientsById = new Map<string, ClientSockets>();
 
 function isValidRole(role: unknown): role is "control" | "stream" {
 	return role === "control" || role === "stream";
+}
+
+function broadcastEventToAllStreamSockets(event: IpcEvent): void {
+	const message = `${JSON.stringify(event)}\n`;
+
+	for (const [clientId, sockets] of clientsById.entries()) {
+		const streamSocket = sockets.stream;
+		if (!streamSocket) continue;
+
+		try {
+			streamSocket.write(message);
+		} catch {
+			// Best-effort cleanup of broken sockets.
+			try {
+				streamSocket.destroy();
+			} catch {
+				// ignore
+			}
+			const { control } = sockets;
+			if (control) {
+				clientsById.set(clientId, { control });
+			} else {
+				clientsById.delete(clientId);
+			}
+		}
+	}
 }
 
 function getStreamSocketForClient(
@@ -664,7 +691,22 @@ async function startServer(): Promise<void> {
 	authToken = ensureAuthToken();
 
 	// Initialize terminal host
-	terminalHost = new TerminalHost();
+	terminalHost = new TerminalHost({
+		onUnattachedExit: ({ sessionId, exitCode, signal }) => {
+			const event: IpcEvent = {
+				type: "event",
+				event: "exit",
+				sessionId,
+				payload: {
+					type: "exit",
+					exitCode,
+					signal,
+				} satisfies TerminalExitEvent,
+			};
+
+			broadcastEventToAllStreamSockets(event);
+		},
+	});
 
 	// Create server
 	const newServer = createServer(handleConnection);
