@@ -392,7 +392,19 @@ export const createTerminalRouter = () => {
 					| { type: "disconnect"; reason: string }
 					| { type: "error"; error: string; code?: string }
 				>((emit) => {
+					if (DEBUG_TERMINAL) {
+						console.log(`[Terminal Stream] Subscribe: ${paneId}`);
+					}
+
+					let firstDataReceived = false;
+
 					const onData = (data: string) => {
+						if (DEBUG_TERMINAL && !firstDataReceived) {
+							firstDataReceived = true;
+							console.log(
+								`[Terminal Stream] First data event for ${paneId}: ${data.length} bytes`,
+							);
+						}
 						emit.next({ type: "data", data });
 					};
 
@@ -420,6 +432,9 @@ export const createTerminalRouter = () => {
 
 					// Cleanup on unsubscribe
 					return () => {
+						if (DEBUG_TERMINAL) {
+							console.log(`[Terminal Stream] Unsubscribe: ${paneId}`);
+						}
 						terminalManager.off(`data:${paneId}`, onData);
 						terminalManager.off(`exit:${paneId}`, onExit);
 						terminalManager.off(`disconnect:${paneId}`, onDisconnect);

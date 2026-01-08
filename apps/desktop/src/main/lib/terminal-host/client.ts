@@ -167,6 +167,18 @@ export class TerminalHostClient extends EventEmitter {
 	private disconnectArmed = false;
 	private clientId = randomUUID();
 
+	constructor() {
+		super();
+		if (DEBUG_CLIENT) {
+			console.log("[TerminalHostClient] Initialized with paths:", {
+				SUPERSET_DIR_NAME,
+				SUPERSET_HOME_DIR,
+				SOCKET_PATH,
+				NODE_ENV: process.env.NODE_ENV,
+			});
+		}
+	}
+
 	// ===========================================================================
 	// Connection Management
 	// ===========================================================================
