@@ -29,10 +29,51 @@ import { createSession, type Session } from "./session";
 
 /** Timeout for force-disposing sessions that don't exit after kill */
 const KILL_TIMEOUT_MS = 5000;
+const MAX_CONCURRENT_SPAWNS = 3;
+const SPAWN_READY_TIMEOUT_MS = 5000;
+
+function promiseWithTimeout<T>(
+	promise: Promise<T>,
+	timeoutMs: number,
+): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timeoutId = setTimeout(() => {
+			reject(new Error(`Timeout after ${timeoutMs}ms`));
+		}, timeoutMs);
+
+		promise
+			.then((value) => {
+				clearTimeout(timeoutId);
+				resolve(value);
+			})
+			.catch((error) => {
+				clearTimeout(timeoutId);
+				reject(error);
+			});
+	});
+}
 
 export class TerminalHost {
 	private sessions: Map<string, Session> = new Map();
 	private killTimers: Map<string, NodeJS.Timeout> = new Map();
+	private spawnLimiter = new Semaphore(MAX_CONCURRENT_SPAWNS);
+	private onUnattachedExit?: (event: {
+		sessionId: string;
+		exitCode: number;
+		signal?: number;
+	}) => void;
+
+	constructor({
+		onUnattachedExit,
+	}: {
+		onUnattachedExit?: (event: {
+			sessionId: string;
+			exitCode: number;
+			signal?: number;
+		}) => void;
+	} = {}) {
+		this.onUnattachedExit = onUnattachedExit;
+	}
 
 	/**
 	 * Create or attach to a terminal session
@@ -67,21 +108,37 @@ export class TerminalHost {
 		}
 
 		if (!session) {
+			const releaseSpawn = await this.spawnLimiter.acquire();
+
 			// Create new session
-			session = createSession(request);
+			try {
+				session = createSession(request);
 
-			// Set up exit handler
-			session.onExit((id, exitCode, signal) => {
-				this.handleSessionExit(id, exitCode, signal);
-			});
+				// Set up exit handler
+				session.onExit((id, exitCode, signal) => {
+					this.handleSessionExit(id, exitCode, signal);
+				});
 
-			// Spawn PTY
-			session.spawn({
-				cwd: request.cwd || process.env.HOME || "/",
-				cols: request.cols,
-				rows: request.rows,
-				env: request.env,
-			});
+				// Spawn PTY
+				session.spawn({
+					cwd: request.cwd || process.env.HOME || "/",
+					cols: request.cols,
+					rows: request.rows,
+					env: request.env,
+				});
+
+				// Hold the spawn permit until the PTY is ready (or times out). This spreads
+				// out large bursts of session creation and avoids CPU spikes from dozens
+				// of shells starting simultaneously.
+				void promiseWithTimeout(session.waitForReady(), SPAWN_READY_TIMEOUT_MS)
+					.catch(() => {})
+					.finally(() => {
+						releaseSpawn();
+					});
+			} catch (error) {
+				releaseSpawn();
+				throw error;
+			}
 
 			// Run initial commands if provided (after PTY is ready)
 			if (request.initialCommands && request.initialCommands.length > 0) {
@@ -223,14 +280,20 @@ export class TerminalHost {
 	 * it's actually in the process of being killed.
 	 */
 	listSessions(): ListSessionsResponse {
-		const sessions = Array.from(this.sessions.values()).map((session) => ({
-			sessionId: session.sessionId,
-			workspaceId: session.workspaceId,
-			paneId: session.paneId,
-			isAlive: session.isAttachable, // Use isAttachable to prevent kill/attach races
-			attachedClients: session.clientCount,
-			pid: session.pid,
-		}));
+		const sessions = Array.from(this.sessions.values()).map((session) => {
+			const meta = session.getMeta();
+			return {
+				sessionId: session.sessionId,
+				workspaceId: session.workspaceId,
+				paneId: session.paneId,
+				isAlive: session.isAttachable, // Use isAttachable to prevent kill/attach races
+				attachedClients: session.clientCount,
+				pid: session.pid,
+				createdAt: meta.createdAt,
+				lastAttachedAt: meta.lastAttachedAt,
+				shell: meta.shell,
+			};
+		});
 
 		return { sessions };
 	}
@@ -298,11 +361,19 @@ export class TerminalHost {
 	 */
 	private handleSessionExit(
 		sessionId: string,
-		_exitCode: number,
-		_signal?: number,
+		exitCode: number,
+		signal?: number,
 	): void {
 		// Clear the kill timer since session exited normally
 		this.clearKillTimer(sessionId);
+
+		// If no clients are attached, the session won't have anywhere to deliver the
+		// exit event. Emit a low-volume lifecycle signal so the main process can keep
+		// UI state correct even when a terminal isn't actively streamed.
+		const session = this.sessions.get(sessionId);
+		if (session?.clientCount === 0) {
+			this.onUnattachedExit?.({ sessionId, exitCode, signal });
+		}
 
 		// Keep session around for a bit so clients can see exit status
 		// Then clean up (reschedule if clients still attached)
@@ -342,5 +413,33 @@ export class TerminalHost {
 				this.scheduleSessionCleanup(sessionId);
 			}
 		}, 5000);
+	}
+}
+
+class Semaphore {
+	private inUse = 0;
+	private queue: Array<(release: () => void) => void> = [];
+
+	constructor(private max: number) {}
+
+	acquire(): Promise<() => void> {
+		if (this.inUse < this.max) {
+			this.inUse++;
+			return Promise.resolve(() => this.release());
+		}
+
+		return new Promise<() => void>((resolve) => {
+			this.queue.push(resolve);
+		});
+	}
+
+	private release(): void {
+		this.inUse = Math.max(0, this.inUse - 1);
+
+		const next = this.queue.shift();
+		if (next) {
+			this.inUse++;
+			next(() => this.release());
+		}
 	}
 }

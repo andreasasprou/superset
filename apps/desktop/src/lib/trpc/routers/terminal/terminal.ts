@@ -4,13 +4,18 @@ import { projects, workspaces, worktrees } from "@superset/local-db";
 import { observable } from "@trpc/server/observable";
 import { eq } from "drizzle-orm";
 import { localDb } from "main/lib/local-db";
-import { getActiveTerminalManager } from "main/lib/terminal";
+import {
+	DaemonTerminalManager,
+	getActiveTerminalManager,
+} from "main/lib/terminal";
+import { getTerminalHistoryRootDir } from "main/lib/terminal-history";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
 import { getWorkspacePath } from "../workspaces/utils/worktree";
 import { resolveCwd } from "./utils";
 
 const DEBUG_TERMINAL = process.env.SUPERSET_TERMINAL_DEBUG === "1";
+let createOrAttachCallCounter = 0;
 
 /**
  * Terminal router using TerminalManager with node-pty
@@ -51,6 +56,8 @@ export const createTerminalRouter = () => {
 				}),
 			)
 			.mutation(async ({ input }) => {
+				const callId = ++createOrAttachCallCounter;
+				const startedAt = Date.now();
 				const {
 					paneId,
 					tabId,
@@ -111,9 +118,11 @@ export const createTerminalRouter = () => {
 
 					if (DEBUG_TERMINAL) {
 						console.log("[Terminal Router] createOrAttach result:", {
+							callId,
 							paneId,
 							isNew: result.isNew,
 							wasRecovered: result.wasRecovered,
+							durationMs: Date.now() - startedAt,
 						});
 					}
 
@@ -129,6 +138,14 @@ export const createTerminalRouter = () => {
 						snapshot: result.snapshot,
 					};
 				} catch (error) {
+					if (DEBUG_TERMINAL) {
+						console.warn("[Terminal Router] createOrAttach failed:", {
+							callId,
+							paneId,
+							durationMs: Date.now() - startedAt,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
 					console.error("[Terminal Router] createOrAttach ERROR:", error);
 					throw error;
 				}
@@ -233,6 +250,55 @@ export const createTerminalRouter = () => {
 			.mutation(async ({ input }) => {
 				await terminalManager.clearScrollback(input);
 			}),
+
+		listDaemonSessions: publicProcedure.query(async () => {
+			if (!(terminalManager instanceof DaemonTerminalManager)) {
+				return { daemonModeEnabled: false, sessions: [] };
+			}
+
+			const response = await terminalManager.listDaemonSessions();
+			return { daemonModeEnabled: true, sessions: response.sessions };
+		}),
+
+		killAllDaemonSessions: publicProcedure.mutation(async () => {
+			if (!(terminalManager instanceof DaemonTerminalManager)) {
+				return { daemonModeEnabled: false, killedCount: 0 };
+			}
+
+			const { sessions } = await terminalManager.listDaemonSessions();
+			await terminalManager.forceKillAll();
+			return { daemonModeEnabled: true, killedCount: sessions.length };
+		}),
+
+		killDaemonSessionsForWorkspace: publicProcedure
+			.input(z.object({ workspaceId: z.string() }))
+			.mutation(async ({ input }) => {
+				if (!(terminalManager instanceof DaemonTerminalManager)) {
+					return { daemonModeEnabled: false, killedCount: 0 };
+				}
+
+				const { sessions } = await terminalManager.listDaemonSessions();
+				const toKill = sessions.filter(
+					(session) => session.workspaceId === input.workspaceId,
+				);
+
+				for (const session of toKill) {
+					await terminalManager.kill({ paneId: session.sessionId });
+				}
+
+				return { daemonModeEnabled: true, killedCount: toKill.length };
+			}),
+
+		clearTerminalHistory: publicProcedure.mutation(async () => {
+			const historyRoot = getTerminalHistoryRootDir();
+			await fs.rm(historyRoot, { recursive: true, force: true });
+
+			if (terminalManager instanceof DaemonTerminalManager) {
+				await terminalManager.resetHistoryPersistence();
+			}
+
+			return { success: true };
+		}),
 
 		getSession: publicProcedure
 			.input(z.string())

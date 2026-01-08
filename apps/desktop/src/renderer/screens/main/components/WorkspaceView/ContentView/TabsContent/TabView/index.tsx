@@ -21,9 +21,11 @@ import { TabPane } from "./TabPane";
 
 interface TabViewProps {
 	tab: Tab;
+	panes: Record<string, Pane>;
+	isTabVisible?: boolean;
 }
 
-export function TabView({ tab }: TabViewProps) {
+export function TabView({ tab, panes, isTabVisible = true }: TabViewProps) {
 	const updateTabLayout = useTabsStore((s) => s.updateTabLayout);
 	const removePane = useTabsStore((s) => s.removePane);
 	const removeTab = useTabsStore((s) => s.removeTab);
@@ -145,6 +147,7 @@ export function TabView({ tab }: TabViewProps) {
 					paneId={paneId}
 					path={path}
 					isActive={isActive}
+					isTabVisible={isTabVisible}
 					tabId={tab.id}
 					workspaceId={tab.workspaceId}
 					splitPaneAuto={splitPaneAuto}
@@ -161,6 +164,7 @@ export function TabView({ tab }: TabViewProps) {
 		[
 			tabPanes,
 			focusedPaneId,
+			isTabVisible,
 			tab.id,
 			tab.workspaceId,
 			worktreePath,

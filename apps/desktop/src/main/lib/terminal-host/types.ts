@@ -229,6 +229,11 @@ export interface ListSessionsResponse {
 		attachedClients: number;
 		/** PTY process ID (null if not yet spawned or exited) */
 		pid: number | null;
+		/** ISO timestamp */
+		createdAt?: string;
+		/** ISO timestamp */
+		lastAttachedAt?: string;
+		shell?: string;
 	}>;
 }
 

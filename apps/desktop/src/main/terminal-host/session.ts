@@ -95,7 +95,6 @@ export class Session {
 	private subprocessStdinQueue: Buffer[] = [];
 	private subprocessStdinQueuedBytes = 0;
 	private subprocessStdinDrainArmed = false;
-	// biome-ignore lint/correctness/noUnusedPrivateClassMembers: stored for future debugging/logging
 	private ptyPid: number | null = null;
 
 	// Promise that resolves when PTY is ready to accept writes
@@ -353,6 +352,13 @@ export class Session {
 			} satisfies TerminalExitEvent);
 
 			this.onSessionExit?.(this.sessionId, exitCode);
+		}
+
+		// Ensure waiters don't hang forever if the subprocess exits before sending Spawned.
+		// Callers must still check isAlive before writing.
+		if (this.ptyReadyResolve) {
+			this.ptyReadyResolve();
+			this.ptyReadyResolve = null;
 		}
 
 		this.subprocess = null;

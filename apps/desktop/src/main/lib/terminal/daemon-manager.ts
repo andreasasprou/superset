@@ -12,6 +12,7 @@
 import { EventEmitter } from "node:events";
 import { workspaces } from "@superset/local-db";
 import { track } from "main/lib/analytics";
+import { appState } from "main/lib/app-state";
 import { localDb } from "main/lib/local-db";
 import {
 	containsClearScrollbackSequence,
@@ -23,6 +24,7 @@ import {
 	getTerminalHostClient,
 	type TerminalHostClient,
 } from "../terminal-host/client";
+import type { ListSessionsResponse } from "../terminal-host/types";
 import { buildTerminalEnv, getDefaultShell } from "./env";
 import { portManager } from "./port-manager";
 import type { CreateSessionParams, SessionResult } from "./types";
@@ -34,6 +36,7 @@ import type { CreateSessionParams, SessionResult } from "./types";
 /** Delay before removing session from local cache after exit event */
 const SESSION_CLEANUP_DELAY_MS = 5000;
 const DEBUG_TERMINAL = process.env.SUPERSET_TERMINAL_DEBUG === "1";
+const CREATE_OR_ATTACH_CONCURRENCY = 3;
 
 // =============================================================================
 // Types
@@ -59,6 +62,11 @@ export class DaemonTerminalManager extends EventEmitter {
 	private client: TerminalHostClient;
 	private sessions = new Map<string, SessionInfo>();
 	private pendingSessions = new Map<string, Promise<SessionResult>>();
+	private createOrAttachLimiter = new PrioritySemaphore(
+		CREATE_OR_ATTACH_CONCURRENCY,
+	);
+	private daemonAliveSessionIds = new Set<string>();
+	private daemonSessionIdsHydrated = false;
 
 	/** History writers for persisting scrollback to disk (for reboot recovery) */
 	private historyWriters = new Map<string, HistoryWriter>();
@@ -102,6 +110,8 @@ export class DaemonTerminalManager extends EventEmitter {
 		try {
 			const response = await this.client.listSessions();
 			if (response.sessions.length === 0) {
+				this.daemonAliveSessionIds.clear();
+				this.daemonSessionIdsHydrated = true;
 				return;
 			}
 
@@ -130,6 +140,18 @@ export class DaemonTerminalManager extends EventEmitter {
 				}
 			}
 
+			// Cache the daemon session inventory so createOrAttach can fast-path
+			// existing sessions without touching disk (cold restore check only
+			// applies when the daemon does not have a session).
+			const preservedSessions = response.sessions.filter(
+				(session) =>
+					validWorkspaceIds.has(session.workspaceId) && session.isAlive,
+			);
+			this.daemonAliveSessionIds = new Set(
+				preservedSessions.map((session) => session.sessionId),
+			);
+			this.daemonSessionIdsHydrated = true;
+
 			const preservedCount = response.sessions.length - orphanedCount;
 			if (preservedCount > 0) {
 				console.log(
@@ -139,6 +161,23 @@ export class DaemonTerminalManager extends EventEmitter {
 		} catch (error) {
 			console.warn(
 				"[DaemonTerminalManager] Failed to reconcile sessions:",
+				error,
+			);
+		}
+	}
+
+	private async ensureDaemonSessionIdsHydrated(): Promise<void> {
+		if (this.daemonSessionIdsHydrated) return;
+
+		try {
+			const response = await this.client.listSessions();
+			this.daemonAliveSessionIds = new Set(
+				response.sessions.filter((s) => s.isAlive).map((s) => s.sessionId),
+			);
+			this.daemonSessionIdsHydrated = true;
+		} catch (error) {
+			console.warn(
+				"[DaemonTerminalManager] Failed to list daemon sessions:",
 				error,
 			);
 		}
@@ -174,6 +213,7 @@ export class DaemonTerminalManager extends EventEmitter {
 			"exit",
 			(sessionId: string, exitCode: number, signal?: number) => {
 				const paneId = sessionId;
+				this.daemonAliveSessionIds.delete(paneId);
 
 				// Update session state
 				const session = this.sessions.get(paneId);
@@ -190,6 +230,7 @@ export class DaemonTerminalManager extends EventEmitter {
 
 				// Emit exit event
 				this.emit(`exit:${paneId}`, exitCode, signal);
+				this.emit("terminalExit", { paneId, exitCode, signal });
 
 				// Clean up session after delay (track timeout for cancellation on dispose)
 				const timeoutId = setTimeout(() => {
@@ -203,6 +244,8 @@ export class DaemonTerminalManager extends EventEmitter {
 		// Handle client disconnection - notify all active sessions
 		this.client.on("disconnected", () => {
 			console.warn("[DaemonTerminalManager] Disconnected from daemon");
+			this.daemonAliveSessionIds.clear();
+			this.daemonSessionIdsHydrated = false;
 			// Emit disconnect event for all active sessions so terminals can show error UI
 			for (const [paneId, session] of this.sessions.entries()) {
 				if (session.isAlive) {
@@ -216,6 +259,8 @@ export class DaemonTerminalManager extends EventEmitter {
 
 		this.client.on("error", (error: Error) => {
 			console.error("[DaemonTerminalManager] Client error:", error.message);
+			this.daemonAliveSessionIds.clear();
+			this.daemonSessionIdsHydrated = false;
 			// Emit error event for all active sessions
 			for (const [paneId, session] of this.sessions.entries()) {
 				if (session.isAlive) {
@@ -415,9 +460,21 @@ export class DaemonTerminalManager extends EventEmitter {
 		}
 	}
 
+	async listDaemonSessions(): Promise<ListSessionsResponse> {
+		const response = await this.client.listSessions();
+		this.daemonAliveSessionIds = new Set(
+			response.sessions.filter((s) => s.isAlive).map((s) => s.sessionId),
+		);
+		this.daemonSessionIdsHydrated = true;
+		return response;
+	}
+
 	private async doCreateOrAttach(
 		params: CreateSessionParams,
 	): Promise<SessionResult> {
+		const releaseCreateOrAttach = await this.createOrAttachLimiter.acquire(
+			this.getCreateOrAttachPriority(params),
+		);
 		const {
 			paneId,
 			tabId,
@@ -429,194 +486,227 @@ export class DaemonTerminalManager extends EventEmitter {
 			cols = 80,
 			rows = 24,
 			initialCommands,
+			skipColdRestore,
 		} = params;
 
-		// FIRST: Check for sticky cold restore info (survives React StrictMode remounts)
-		// This ensures the second mount still sees the cold restore detected on first mount
-		const stickyRestore = this.coldRestoreInfo.get(paneId);
-		if (stickyRestore) {
-			return {
-				isNew: false,
-				scrollback: stickyRestore.scrollback,
-				wasRecovered: true,
-				isColdRestore: true,
-				previousCwd: stickyRestore.previousCwd,
-				snapshot: {
-					snapshotAnsi: stickyRestore.scrollback,
-					rehydrateSequences: "",
-					cwd: stickyRestore.previousCwd || null,
-					modes: {},
-					cols: stickyRestore.cols,
-					rows: stickyRestore.rows,
-					scrollbackLines: 0,
-				},
-			};
-		}
+		const MAX_SCROLLBACK_CHARS = 500_000;
 
-		// Check for cold restore: read existing history from disk BEFORE calling daemon
-		// This detects if there's scrollback from a previous session that ended uncleanly
-		const historyReader = new HistoryReader(workspaceId, paneId);
-		const existingHistory = await historyReader.read();
-		const hasPreviousSession =
-			!!existingHistory.metadata && !!existingHistory.scrollback;
-		const wasUncleanShutdown =
-			hasPreviousSession && !existingHistory.metadata?.endedAt;
+		try {
+			// Sticky cold restore info (survives React StrictMode remounts).
+			// The renderer must call ackColdRestore() to clear this.
+			if (!skipColdRestore) {
+				const stickyRestore = this.coldRestoreInfo.get(paneId);
+				if (stickyRestore) {
+					return {
+						isNew: false,
+						scrollback: stickyRestore.scrollback,
+						wasRecovered: true,
+						isColdRestore: true,
+						previousCwd: stickyRestore.previousCwd,
+						snapshot: {
+							snapshotAnsi: stickyRestore.scrollback,
+							rehydrateSequences: "",
+							cwd: stickyRestore.previousCwd || null,
+							modes: {},
+							cols: stickyRestore.cols,
+							rows: stickyRestore.rows,
+							scrollbackLines: 0,
+						},
+					};
+				}
+			}
 
-		// Build environment for the terminal
-		const shell = getDefaultShell();
-		const env = buildTerminalEnv({
-			shell,
-			paneId,
-			tabId,
-			workspaceId,
-			workspaceName,
-			workspacePath,
-			rootPath,
-		});
+			if (skipColdRestore) {
+				this.coldRestoreInfo.delete(paneId);
+			}
 
-		if (DEBUG_TERMINAL) {
-			console.log("[DaemonTerminalManager] Calling daemon createOrAttach:", {
-				paneId,
+			// Attach fast-path: if the daemon already has the session, don't touch disk.
+			await this.ensureDaemonSessionIdsHydrated();
+			const daemonHasSession = this.daemonAliveSessionIds.has(paneId);
+
+			// Cold restore: only applies when the daemon does not have the session.
+			if (!daemonHasSession && !skipColdRestore) {
+				const historyReader = new HistoryReader(workspaceId, paneId);
+				const metadata = await historyReader.readMetadata();
+				const wasUncleanShutdown = !!metadata && !metadata.endedAt;
+
+				if (wasUncleanShutdown) {
+					const rawScrollback = await historyReader.readScrollback();
+					const scrollback =
+						rawScrollback.length > MAX_SCROLLBACK_CHARS
+							? rawScrollback.slice(-MAX_SCROLLBACK_CHARS)
+							: rawScrollback;
+
+					// Store sticky info so StrictMode remounts still show cold restore.
+					this.coldRestoreInfo.set(paneId, {
+						scrollback,
+						previousCwd: metadata.cwd,
+						cols: metadata.cols || cols,
+						rows: metadata.rows || rows,
+					});
+
+					return {
+						isNew: false,
+						scrollback,
+						wasRecovered: true,
+						isColdRestore: true,
+						previousCwd: metadata.cwd,
+						snapshot: {
+							snapshotAnsi: scrollback,
+							rehydrateSequences: "",
+							cwd: metadata.cwd,
+							modes: {},
+							cols: metadata.cols || cols,
+							rows: metadata.rows || rows,
+							scrollbackLines: 0,
+						},
+					};
+				}
+			}
+
+			// If the user explicitly starts a new shell after cold restore, clear the
+			// on-disk history so we don't re-trigger cold restore on the next attach.
+			if (!daemonHasSession && skipColdRestore) {
+				await this.cleanupHistory(paneId, workspaceId);
+			}
+
+			// Build environment for the terminal.
+			const shell = getDefaultShell();
+			const env = buildTerminalEnv({
 				shell,
-				cwd,
+				paneId,
+				tabId,
+				workspaceId,
+				workspaceName,
+				workspacePath,
+				rootPath,
+			});
+
+			if (DEBUG_TERMINAL) {
+				console.log("[DaemonTerminalManager] Calling daemon createOrAttach:", {
+					paneId,
+					shell,
+					cwd,
+					cols,
+					rows,
+				});
+			}
+
+			// Create or attach via daemon.
+			const response = await this.client.createOrAttach({
+				sessionId: paneId, // Use paneId as sessionId for simplicity
+				paneId,
+				tabId,
+				workspaceId,
+				workspaceName,
+				workspacePath,
+				rootPath,
 				cols,
 				rows,
+				cwd,
+				env,
+				shell,
+				initialCommands,
 			});
-		}
 
-		// Call daemon
-		const response = await this.client.createOrAttach({
-			sessionId: paneId, // Use paneId as sessionId for simplicity
-			paneId,
-			tabId,
-			workspaceId,
-			workspaceName,
-			workspacePath,
-			rootPath,
-			cols,
-			rows,
-			cwd,
-			env,
-			shell,
-			initialCommands,
-		});
+			this.daemonAliveSessionIds.add(paneId);
 
-		// Detect cold restore: daemon created new session but we have unclean history
-		const isColdRestore = response.isNew && wasUncleanShutdown;
+			const sessionCwd = response.snapshot.cwd || cwd || "";
 
-		// For cold restore, use the previous session's cwd; otherwise use daemon's cwd
-		const previousCwd = existingHistory.metadata?.cwd;
-		const sessionCwd = isColdRestore
-			? previousCwd || cwd || ""
-			: response.snapshot.cwd || cwd || "";
+			// Guard against invalid dimensions (can happen if terminal not yet sized).
+			const effectiveCols = response.snapshot.cols || cols;
+			const effectiveRows = response.snapshot.rows || rows;
 
-		// Guard against invalid dimensions (can happen if terminal not yet sized)
-		const effectiveCols = response.snapshot.cols || cols;
-		const effectiveRows = response.snapshot.rows || rows;
-
-		// Track session locally
-		this.sessions.set(paneId, {
-			paneId,
-			workspaceId,
-			isAlive: true,
-			lastActive: Date.now(),
-			cwd: sessionCwd,
-			pid: response.pid,
-			cols: effectiveCols,
-			rows: effectiveRows,
-		});
-
-		// Register with port manager for process-based port scanning
-		// PID may be null if PTY not yet spawned (will be polled via listSessions)
-		portManager.upsertDaemonSession(paneId, workspaceId, response.pid);
-
-		// Initialize history writer for reboot persistence
-		// For cold restore: start fresh (scrollback is read-only display)
-		// For recovered session: include existing scrollback
-		// For new session: start empty
-		const initialScrollback = response.wasRecovered
-			? response.snapshot.snapshotAnsi
-			: undefined;
-
-		if (effectiveCols >= 1 && effectiveRows >= 1) {
-			this.initHistoryWriter(
+			// Track session locally.
+			this.sessions.set(paneId, {
 				paneId,
 				workspaceId,
-				sessionCwd,
-				effectiveCols,
-				effectiveRows,
-				initialScrollback,
-			).catch((error) => {
-				console.error(
-					`[DaemonTerminalManager] Failed to init history for ${paneId}:`,
-					error,
+				isAlive: true,
+				lastActive: Date.now(),
+				cwd: sessionCwd,
+				pid: response.pid,
+				cols: effectiveCols,
+				rows: effectiveRows,
+			});
+
+			// Register with port manager for process-based port scanning.
+			// PID may be null if PTY not yet spawned or has exited.
+			portManager.upsertDaemonSession(paneId, workspaceId, response.pid);
+
+			// Initialize history writer for reboot persistence.
+			const snapshotAnsi = response.snapshot.snapshotAnsi || "";
+			const initialScrollback =
+				snapshotAnsi.length > MAX_SCROLLBACK_CHARS
+					? snapshotAnsi.slice(-MAX_SCROLLBACK_CHARS)
+					: snapshotAnsi;
+
+			if (effectiveCols >= 1 && effectiveRows >= 1) {
+				this.initHistoryWriter(
+					paneId,
+					workspaceId,
+					sessionCwd,
+					effectiveCols,
+					effectiveRows,
+					initialScrollback,
+				).catch((error) => {
+					console.error(
+						`[DaemonTerminalManager] Failed to init history for ${paneId}:`,
+						error,
+					);
+				});
+			} else {
+				console.warn(
+					`[DaemonTerminalManager] Skipping history init for ${paneId}: invalid dimensions ${effectiveCols}x${effectiveRows}`,
 				);
-			});
-		} else {
-			console.warn(
-				`[DaemonTerminalManager] Skipping history init for ${paneId}: invalid dimensions ${effectiveCols}x${effectiveRows}`,
-			);
-		}
+			}
 
-		// Track terminal opened (but not for cold restore - that's a continuation)
-		if (response.isNew && !isColdRestore) {
-			track("terminal_opened", { workspace_id: workspaceId, pane_id: paneId });
-		}
-
-		// For cold restore, return disk scrollback instead of daemon snapshot
-		if (isColdRestore) {
-			// Cap scrollback size for performance (matches non-daemon mode)
-			const MAX_SCROLLBACK_CHARS = 500_000;
-			const scrollback =
-				existingHistory.scrollback.length > MAX_SCROLLBACK_CHARS
-					? existingHistory.scrollback.slice(-MAX_SCROLLBACK_CHARS)
-					: existingHistory.scrollback;
-
-			// Store in sticky map - survives React StrictMode remounts
-			// Renderer must call ackColdRestore() to clear this
-			this.coldRestoreInfo.set(paneId, {
-				scrollback,
-				previousCwd: previousCwd || undefined,
-				cols: existingHistory.metadata?.cols || cols,
-				rows: existingHistory.metadata?.rows || rows,
-			});
+			// Track terminal opened (only on actual daemon session creation).
+			if (response.isNew) {
+				track("terminal_opened", {
+					workspace_id: workspaceId,
+					pane_id: paneId,
+				});
+			}
 
 			return {
-				isNew: false, // Not truly new - we're restoring
-				scrollback: scrollback,
-				wasRecovered: true,
-				isColdRestore: true,
-				previousCwd: previousCwd || undefined,
+				isNew: response.isNew,
+				// In daemon mode, snapshot.snapshotAnsi is the canonical content source.
+				// We set scrollback to empty to avoid duplicating the payload over IPC.
+				// The renderer should prefer snapshot.snapshotAnsi when available.
+				scrollback: "",
+				wasRecovered: response.wasRecovered,
 				snapshot: {
-					snapshotAnsi: scrollback,
-					rehydrateSequences: "",
-					cwd: previousCwd || null,
-					modes: {},
-					cols: existingHistory.metadata?.cols || cols,
-					rows: existingHistory.metadata?.rows || rows,
-					scrollbackLines: 0,
+					snapshotAnsi: response.snapshot.snapshotAnsi,
+					rehydrateSequences: response.snapshot.rehydrateSequences,
+					cwd: response.snapshot.cwd,
+					modes: response.snapshot.modes as unknown as Record<string, boolean>,
+					cols: response.snapshot.cols,
+					rows: response.snapshot.rows,
+					scrollbackLines: response.snapshot.scrollbackLines,
+					debug: response.snapshot.debug,
 				},
 			};
+		} finally {
+			releaseCreateOrAttach();
 		}
+	}
 
-		return {
-			isNew: response.isNew,
-			// In daemon mode, snapshot.snapshotAnsi is the canonical content source.
-			// We set scrollback to empty to avoid duplicating the payload over IPC.
-			// The renderer should prefer snapshot.snapshotAnsi when available.
-			scrollback: "",
-			wasRecovered: response.wasRecovered,
-			snapshot: {
-				snapshotAnsi: response.snapshot.snapshotAnsi,
-				rehydrateSequences: response.snapshot.rehydrateSequences,
-				cwd: response.snapshot.cwd,
-				modes: response.snapshot.modes as unknown as Record<string, boolean>,
-				cols: response.snapshot.cols,
-				rows: response.snapshot.rows,
-				scrollbackLines: response.snapshot.scrollbackLines,
-				debug: response.snapshot.debug,
-			},
-		};
+	private getCreateOrAttachPriority(params: CreateSessionParams): number {
+		try {
+			const tabsState = appState.data?.tabsState;
+			const activeTabId = tabsState?.activeTabIds?.[params.workspaceId];
+			const focusedPaneId =
+				activeTabId && tabsState?.focusedPaneIds?.[activeTabId];
+
+			const isActiveFocusedPane =
+				activeTabId === params.tabId && focusedPaneId === params.paneId;
+
+			return isActiveFocusedPane ? 0 : 1;
+		} catch {
+			// If appState isn't initialized yet or is otherwise unavailable, treat all
+			// requests as the same priority.
+			return 1;
+		}
 	}
 
 	write(params: { paneId: string; data: string }): void {
@@ -705,6 +795,7 @@ export class DaemonTerminalManager extends EventEmitter {
 		deleteHistory?: boolean;
 	}): Promise<void> {
 		const { paneId, deleteHistory = false } = params;
+		this.daemonAliveSessionIds.delete(paneId);
 
 		// Emit exit event BEFORE killing so tRPC subscriptions complete cleanly.
 		// This prevents WRITE_FAILED errors when the daemon kills the session
@@ -716,6 +807,7 @@ export class DaemonTerminalManager extends EventEmitter {
 			session.isAlive = false;
 			session.pid = null;
 			this.emit(`exit:${paneId}`, 0, "SIGTERM");
+			this.emit("terminalExit", { paneId, exitCode: 0, signal: undefined });
 		}
 
 		// Unregister from port manager
@@ -735,12 +827,9 @@ export class DaemonTerminalManager extends EventEmitter {
 		const { paneId } = params;
 
 		const session = this.sessions.get(paneId);
-		if (!session) {
-			console.warn(`Cannot detach terminal ${paneId}: session not found`);
-			return;
-		}
 
-		// Fire and forget
+		// Fire and forget. Daemon detach is idempotent and succeeds even if the
+		// session doesn't exist (prevents noisy races during startup/cold restore).
 		this.client.detach({ sessionId: paneId }).catch((error) => {
 			console.error(
 				`[DaemonTerminalManager] Detach failed for ${paneId}:`,
@@ -748,7 +837,9 @@ export class DaemonTerminalManager extends EventEmitter {
 			);
 		});
 
-		session.lastActive = Date.now();
+		if (session) {
+			session.lastActive = Date.now();
+		}
 	}
 
 	async clearScrollback(params: { paneId: string }): Promise<void> {
@@ -787,6 +878,45 @@ export class DaemonTerminalManager extends EventEmitter {
 				}
 			}
 		}
+	}
+
+	async resetHistoryPersistence(): Promise<void> {
+		const closePromises: Promise<void>[] = [];
+		for (const [paneId, writer] of this.historyWriters.entries()) {
+			closePromises.push(
+				writer.close().catch((error) => {
+					console.warn(
+						`[DaemonTerminalManager] Failed to close history for ${paneId}:`,
+						error,
+					);
+				}),
+			);
+		}
+		await Promise.all(closePromises);
+		this.historyWriters.clear();
+		this.historyInitializing.clear();
+		this.pendingHistoryData.clear();
+
+		const initPromises: Promise<void>[] = [];
+		for (const [paneId, session] of this.sessions.entries()) {
+			if (!session.isAlive) continue;
+			initPromises.push(
+				this.initHistoryWriter(
+					paneId,
+					session.workspaceId,
+					session.cwd,
+					session.cols,
+					session.rows,
+					undefined,
+				).catch((error) => {
+					console.warn(
+						`[DaemonTerminalManager] Failed to reinitialize history for ${paneId}:`,
+						error,
+					);
+				}),
+			);
+		}
+		await Promise.all(initPromises);
 	}
 
 	getSession(
@@ -852,6 +982,7 @@ export class DaemonTerminalManager extends EventEmitter {
 					session.isAlive = false;
 					session.pid = null;
 					this.emit(`exit:${paneId}`, 0, "SIGTERM");
+					this.emit("terminalExit", { paneId, exitCode: 0, signal: undefined });
 				}
 
 				// Unregister from port manager
@@ -918,7 +1049,8 @@ export class DaemonTerminalManager extends EventEmitter {
 				name.startsWith("data:") ||
 				name.startsWith("exit:") ||
 				name.startsWith("disconnect:") ||
-				name.startsWith("error:")
+				name.startsWith("error:") ||
+				name === "terminalExit"
 			) {
 				this.removeAllListeners(event);
 			}
@@ -964,6 +1096,9 @@ export class DaemonTerminalManager extends EventEmitter {
 		// Disconnect from daemon but DON'T kill sessions - they should persist
 		// across app restarts. This is the core feature of daemon mode.
 		this.sessions.clear();
+		this.daemonAliveSessionIds.clear();
+		this.daemonSessionIdsHydrated = false;
+		this.coldRestoreInfo.clear();
 		this.removeAllListeners();
 		disposeTerminalHostClient();
 	}
@@ -974,6 +1109,17 @@ export class DaemonTerminalManager extends EventEmitter {
 	 * not during normal app shutdown.
 	 */
 	async forceKillAll(): Promise<void> {
+		const response = await this.client.listSessions().catch(() => ({
+			sessions: [],
+		}));
+		const sessionIds = response.sessions.map((s) => s.sessionId);
+
+		// Clear pending cleanup timeouts to prevent callbacks after force kill.
+		for (const timeout of this.cleanupTimeouts.values()) {
+			clearTimeout(timeout);
+		}
+		this.cleanupTimeouts.clear();
+
 		// Close all history writers
 		for (const writer of this.historyWriters.values()) {
 			await writer.close().catch((error) => {
@@ -988,7 +1134,54 @@ export class DaemonTerminalManager extends EventEmitter {
 		this.pendingHistoryData.clear();
 
 		await this.client.killAll({});
+		for (const paneId of sessionIds) {
+			portManager.unregisterDaemonSession(paneId);
+		}
+		this.daemonAliveSessionIds.clear();
+		this.daemonSessionIdsHydrated = true;
+		this.coldRestoreInfo.clear();
 		this.sessions.clear();
+	}
+}
+
+// =============================================================================
+// PrioritySemaphore (small custom concurrency limiter)
+// =============================================================================
+
+class PrioritySemaphore {
+	private inUse = 0;
+	private queue: Array<{
+		priority: number;
+		resolve: (release: () => void) => void;
+	}> = [];
+
+	constructor(private max: number) {}
+
+	acquire(priority: number): Promise<() => void> {
+		if (this.inUse < this.max) {
+			this.inUse++;
+			return Promise.resolve(() => this.release());
+		}
+
+		return new Promise<() => void>((resolve) => {
+			this.queue.push({ priority, resolve });
+			// Small N; simple sort is fine and keeps the implementation obvious.
+			this.queue.sort((a, b) => a.priority - b.priority);
+		});
+	}
+
+	private release(): void {
+		this.inUse = Math.max(0, this.inUse - 1);
+		this.pump();
+	}
+
+	private pump(): void {
+		while (this.inUse < this.max && this.queue.length > 0) {
+			const next = this.queue.shift();
+			if (!next) return;
+			this.inUse++;
+			next.resolve(() => this.release());
+		}
 	}
 }
 

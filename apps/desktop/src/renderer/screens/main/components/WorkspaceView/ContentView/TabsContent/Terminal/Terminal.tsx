@@ -11,6 +11,7 @@ import { useAppHotkey } from "renderer/stores/hotkeys";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import { useTerminalCallbacksStore } from "renderer/stores/tabs/terminal-callbacks";
 import { useTerminalTheme } from "renderer/stores/theme";
+import { scheduleTerminalAttach } from "./attach-scheduler";
 import { sanitizeForTitle } from "./commandBuffer";
 import {
 	createTerminalInstance,
@@ -76,7 +77,11 @@ type CreateOrAttachResult = {
 	};
 };
 
-export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
+export const Terminal = ({
+	tabId,
+	workspaceId,
+	isTabVisible,
+}: TerminalProps) => {
 	const paneId = tabId;
 	// Use granular selectors to avoid re-renders when other panes change
 	const pane = useTabsStore((s) => s.panes[paneId]);
@@ -663,6 +668,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 				cols: xterm.cols,
 				rows: xterm.rows,
 				cwd: restoredCwd || undefined,
+				skipColdRestore: true,
 			},
 			{
 				onSuccess: (result) => {
@@ -940,78 +946,89 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		const initialCommands = paneInitialCommandsRef.current;
 		const initialCwd = paneInitialCwdRef.current;
 
-		createOrAttachRef.current(
-			{
-				paneId,
-				tabId: parentTabIdRef.current || paneId,
-				workspaceId,
-				cols: xterm.cols,
-				rows: xterm.rows,
-				initialCommands,
-				cwd: initialCwd,
+		const cancelInitialAttach = scheduleTerminalAttach({
+			paneId,
+			priority: isTabVisible ? (isFocusedRef.current ? 0 : 1) : 2,
+			run: (done) => {
+				createOrAttachRef.current(
+					{
+						paneId,
+						tabId: parentTabIdRef.current || paneId,
+						workspaceId,
+						cols: xterm.cols,
+						rows: xterm.rows,
+						initialCommands,
+						cwd: initialCwd,
+					},
+					{
+						onSuccess: (result) => {
+							// Clear after successful creation to prevent re-running on future reattach
+							if (initialCommands || initialCwd) {
+								clearPaneInitialDataRef.current(paneId);
+							}
+
+							// FIRST: Check if we have stored cold restore state from a previous mount
+							// (StrictMode causes unmount/remount - check this BEFORE result.isColdRestore
+							// because the second mount's result won't have isColdRestore=true)
+							const storedColdRestore = coldRestoreState.get(paneId);
+							if (storedColdRestore?.isRestored) {
+								setIsRestoredMode(true);
+								setRestoredCwd(storedColdRestore.cwd);
+
+								// Write scrollback to terminal as read-only display
+								if (storedColdRestore.scrollback && xterm) {
+									xterm.write(storedColdRestore.scrollback);
+								}
+
+								// Mark first render complete but don't enable streaming
+								didFirstRenderRef.current = true;
+								return;
+							}
+
+							// Handle cold restore (reboot recovery) - first detection
+							// Store in module-level map to survive StrictMode remount
+							if (result.isColdRestore) {
+								const scrollback =
+									result.snapshot?.snapshotAnsi ?? result.scrollback;
+								coldRestoreState.set(paneId, {
+									isRestored: true,
+									cwd: result.previousCwd || null,
+									scrollback,
+								});
+								setIsRestoredMode(true);
+								setRestoredCwd(result.previousCwd || null);
+
+								// Write scrollback to terminal as read-only display
+								if (scrollback && xterm) {
+									xterm.write(scrollback);
+								}
+
+								// Mark first render complete but don't enable streaming
+								// (shell isn't running - user must click Start Shell)
+								didFirstRenderRef.current = true;
+								return;
+							}
+
+							// Defer initial state restoration until xterm has rendered once.
+							// Streaming is enabled only after restoration is queued into xterm.
+							pendingInitialStateRef.current = result;
+							maybeApplyInitialState();
+						},
+						onError: (error) => {
+							console.error("[Terminal] Failed to create/attach:", error);
+							setConnectionError(
+								error.message || "Failed to connect to terminal",
+							);
+							isStreamReadyRef.current = true;
+							flushPendingEvents();
+						},
+						onSettled: () => {
+							done();
+						},
+					},
+				);
 			},
-			{
-				onSuccess: (result) => {
-					// Clear after successful creation to prevent re-running on future reattach
-					if (initialCommands || initialCwd) {
-						clearPaneInitialDataRef.current(paneId);
-					}
-
-					// FIRST: Check if we have stored cold restore state from a previous mount
-					// (StrictMode causes unmount/remount - check this BEFORE result.isColdRestore
-					// because the second mount's result won't have isColdRestore=true)
-					const storedColdRestore = coldRestoreState.get(paneId);
-					if (storedColdRestore?.isRestored) {
-						setIsRestoredMode(true);
-						setRestoredCwd(storedColdRestore.cwd);
-
-						// Write scrollback to terminal as read-only display
-						if (storedColdRestore.scrollback && xterm) {
-							xterm.write(storedColdRestore.scrollback);
-						}
-
-						// Mark first render complete but don't enable streaming
-						didFirstRenderRef.current = true;
-						return;
-					}
-
-					// Handle cold restore (reboot recovery) - first detection
-					// Store in module-level map to survive StrictMode remount
-					if (result.isColdRestore) {
-						const scrollback =
-							result.snapshot?.snapshotAnsi ?? result.scrollback;
-						coldRestoreState.set(paneId, {
-							isRestored: true,
-							cwd: result.previousCwd || null,
-							scrollback: scrollback,
-						});
-						setIsRestoredMode(true);
-						setRestoredCwd(result.previousCwd || null);
-
-						// Write scrollback to terminal as read-only display
-						if (scrollback && xterm) {
-							xterm.write(scrollback);
-						}
-
-						// Mark first render complete but don't enable streaming
-						// (shell isn't running - user must click Start Shell)
-						didFirstRenderRef.current = true;
-						return;
-					}
-
-					// Defer initial state restoration until xterm has rendered once.
-					// Streaming is enabled only after restoration is queued into xterm.
-					pendingInitialStateRef.current = result;
-					maybeApplyInitialState();
-				},
-				onError: (error) => {
-					console.error("[Terminal] Failed to create/attach:", error);
-					setConnectionError(error.message || "Failed to connect to terminal");
-					isStreamReadyRef.current = true;
-					flushPendingEvents();
-				},
-			},
-		);
+		});
 
 		const inputDisposable = xterm.onData(handleTerminalInput);
 		const keyDisposable = xterm.onKey(handleKeyPress);
@@ -1073,6 +1090,7 @@ export const Terminal = ({ tabId, workspaceId }: TerminalProps) => {
 		});
 
 		return () => {
+			cancelInitialAttach();
 			isUnmounted = true;
 			if (firstRenderFallback) {
 				clearTimeout(firstRenderFallback);
