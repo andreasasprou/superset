@@ -5,6 +5,7 @@ export enum PtySubprocessIpcType {
 	Resize = 3,
 	Kill = 4,
 	Dispose = 5,
+	Signal = 6, // Send signal without marking as terminating (e.g., SIGINT)
 
 	// Subprocess -> daemon events
 	Ready = 101,

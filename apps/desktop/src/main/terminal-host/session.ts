@@ -500,6 +500,11 @@ export class Session {
 		return this.sendFrameToSubprocess(PtySubprocessIpcType.Kill, payload);
 	}
 
+	private sendSignalToSubprocess(signal: string): boolean {
+		const payload = Buffer.from(signal, "utf8");
+		return this.sendFrameToSubprocess(PtySubprocessIpcType.Signal, payload);
+	}
+
 	private sendDisposeToSubprocess(): boolean {
 		return this.sendFrameToSubprocess(PtySubprocessIpcType.Dispose);
 	}
@@ -786,6 +791,20 @@ export class Session {
 			lastAttachedAt: this.lastAttachedAt.toISOString(),
 			shell: this.shell,
 		};
+	}
+
+	/**
+	 * Send a signal to the PTY process without marking the session as terminating.
+	 * Used for signals like SIGINT (Ctrl+C) where the process should continue running.
+	 */
+	sendSignal(signal: string): void {
+		if (this.terminatingAt !== null || this.disposed) {
+			return;
+		}
+
+		if (this.subprocess && this.subprocessReady) {
+			this.sendSignalToSubprocess(signal);
+		}
 	}
 
 	/**

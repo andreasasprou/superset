@@ -203,6 +203,14 @@ export interface DetachRequest {
 }
 
 /**
+ * Send a signal to a terminal session (e.g., SIGINT for Ctrl+C)
+ */
+export interface SignalRequest {
+	sessionId: string;
+	signal: string;
+}
+
+/**
  * Kill a terminal session
  */
 export interface KillRequest {
@@ -348,6 +356,7 @@ export type RequestTypeMap = {
 	write: { request: WriteRequest; response: EmptyResponse };
 	resize: { request: ResizeRequest; response: EmptyResponse };
 	detach: { request: DetachRequest; response: EmptyResponse };
+	signal: { request: SignalRequest; response: EmptyResponse };
 	kill: { request: KillRequest; response: EmptyResponse };
 	killAll: { request: KillAllRequest; response: EmptyResponse };
 	listSessions: { request: undefined; response: ListSessionsResponse };

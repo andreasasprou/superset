@@ -785,7 +785,7 @@ export class DaemonTerminalManager extends EventEmitter {
 	}
 
 	signal(params: { paneId: string; signal?: string }): void {
-		const { paneId, signal = "SIGTERM" } = params;
+		const { paneId, signal = "SIGINT" } = params;
 		const session = this.sessions.get(paneId);
 
 		if (!session || !session.isAlive) {
@@ -795,11 +795,13 @@ export class DaemonTerminalManager extends EventEmitter {
 			return;
 		}
 
-		// Daemon doesn't have a signal method, use kill
-		// For now, just log - we may need to add signal support to daemon
-		console.warn(
-			`[DaemonTerminalManager] Signal ${signal} not yet supported for daemon sessions`,
-		);
+		// Send signal to daemon (fire and forget)
+		this.client.signal({ sessionId: paneId, signal }).catch((error) => {
+			console.warn(
+				`[DaemonTerminalManager] Failed to send signal ${signal} to ${paneId}:`,
+				error,
+			);
+		});
 	}
 
 	async kill(params: {

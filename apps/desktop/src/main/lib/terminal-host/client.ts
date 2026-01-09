@@ -41,6 +41,7 @@ import {
 	PROTOCOL_VERSION,
 	type ResizeRequest,
 	type ShutdownRequest,
+	type SignalRequest,
 	type TerminalDataEvent,
 	type TerminalErrorEvent,
 	type TerminalExitEvent,
@@ -1264,6 +1265,14 @@ export class TerminalHostClient extends EventEmitter {
 	async detach(request: DetachRequest): Promise<EmptyResponse> {
 		await this.ensureConnected();
 		return this.sendRequest<EmptyResponse>("detach", request);
+	}
+
+	/**
+	 * Send a signal to a terminal session (e.g., SIGINT for Ctrl+C)
+	 */
+	async signal(request: SignalRequest): Promise<EmptyResponse> {
+		await this.ensureConnected();
+		return this.sendRequest<EmptyResponse>("signal", request);
 	}
 
 	/**
