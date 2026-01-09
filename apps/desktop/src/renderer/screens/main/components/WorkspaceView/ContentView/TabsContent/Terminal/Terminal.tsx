@@ -1112,6 +1112,9 @@ export const Terminal = ({
 					},
 					{
 						onSuccess: (result) => {
+							// Clear any connection error from previous daemon loss
+							setConnectionError(null);
+
 							if (DEBUG_TERMINAL) {
 								console.log(
 									`[Terminal] createOrAttach success: ${paneId} (${Date.now() - createOrAttachStartTime}ms)`,
