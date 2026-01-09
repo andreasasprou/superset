@@ -39,6 +39,7 @@ import {
 	PROTOCOL_VERSION,
 	type ResizeRequest,
 	type ShutdownRequest,
+	type SignalRequest,
 	type TerminalErrorEvent,
 	type TerminalExitEvent,
 	type WriteRequest,
@@ -446,6 +447,21 @@ const handlers: Record<string, RequestHandler> = {
 		const response = terminalHost.kill(request);
 		sendSuccess(socket, id, response);
 		log("info", `Session ${request.sessionId} killed`);
+	},
+
+	signal: (socket, id, payload, clientState) => {
+		if (!clientState.authenticated) {
+			sendError(socket, id, "NOT_AUTHENTICATED", "Must authenticate first");
+			return;
+		}
+		if (clientState.role !== "control") {
+			sendError(socket, id, "INVALID_ROLE", "signal requires control");
+			return;
+		}
+
+		const request = payload as SignalRequest;
+		const response = terminalHost.signal(request);
+		sendSuccess(socket, id, response);
 	},
 
 	killAll: (socket, id, payload, clientState) => {

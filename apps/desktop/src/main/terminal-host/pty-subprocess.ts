@@ -409,6 +409,25 @@ function handleKill(payload: Buffer): void {
 	escalationTimer.unref();
 }
 
+/**
+ * Send a signal to the PTY process without escalation.
+ * Unlike handleKill, this does not escalate to SIGKILL or force exit.
+ * Used for signals like SIGINT (Ctrl+C) where the process should continue running.
+ */
+function handleSignal(payload: Buffer): void {
+	const signal = payload.length > 0 ? payload.toString("utf8") : "SIGINT";
+
+	if (!ptyProcess) {
+		return;
+	}
+
+	try {
+		ptyProcess.kill(signal);
+	} catch {
+		// Process may already be dead
+	}
+}
+
 function handleDispose(): void {
 	flushOutput();
 
@@ -454,6 +473,9 @@ process.stdin.on("data", (chunk: Buffer) => {
 					break;
 				case PtySubprocessIpcType.Kill:
 					handleKill(frame.payload);
+					break;
+				case PtySubprocessIpcType.Signal:
+					handleSignal(frame.payload);
 					break;
 				case PtySubprocessIpcType.Dispose:
 					handleDispose();

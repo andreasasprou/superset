@@ -19,6 +19,7 @@ import type {
 	KillRequest,
 	ListSessionsResponse,
 	ResizeRequest,
+	SignalRequest,
 	WriteRequest,
 } from "../lib/terminal-host/types";
 import { createSession, type Session } from "./session";
@@ -224,6 +225,22 @@ export class TerminalHost {
 				this.sessions.delete(request.sessionId);
 			}
 		}
+		return { success: true };
+	}
+
+	/**
+	 * Send a signal to a terminal session (e.g., SIGINT for Ctrl+C).
+	 * Unlike kill, this does NOT mark the session as terminating.
+	 */
+	signal(request: SignalRequest): EmptyResponse {
+		const { sessionId, signal } = request;
+		const session = this.sessions.get(sessionId);
+
+		if (!session || !session.isAttachable) {
+			return { success: true };
+		}
+
+		session.sendSignal(signal);
 		return { success: true };
 	}
 
