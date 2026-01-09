@@ -391,7 +391,14 @@ export const Terminal = ({
 
 				// Don't block interaction for non-fatal issues like a paste drop or a
 				// transient write failure (we keep the session alive).
+				// EXCEPTION: "Session not found" means daemon restarted and lost our session -
+				// promote to connection error so retry UI appears and cold restore can kick in.
 				if (
+					event.code === "WRITE_FAILED" &&
+					event.error?.includes("Session not found")
+				) {
+					setConnectionError("Session lost - click to reconnect");
+				} else if (
 					event.code === "WRITE_QUEUE_FULL" ||
 					event.code === "WRITE_FAILED"
 				) {
@@ -658,6 +665,30 @@ export const Terminal = ({
 			{
 				onSuccess: (result) => {
 					setConnectionError(null);
+
+					// Handle cold restore on retry (daemon lost session, disk history available)
+					if (result.isColdRestore) {
+						const scrollback =
+							result.snapshot?.snapshotAnsi ?? result.scrollback;
+						coldRestoreState.set(paneId, {
+							isRestored: true,
+							cwd: result.previousCwd || null,
+							scrollback,
+						});
+						setIsRestoredMode(true);
+						setRestoredCwd(result.previousCwd || null);
+
+						// Clear retry message and write scrollback
+						xterm.clear();
+						if (scrollback) {
+							xterm.write(scrollback);
+						}
+
+						// Don't enable streaming - user must click Start Shell
+						didFirstRenderRef.current = true;
+						return;
+					}
+
 					pendingInitialStateRef.current = result;
 					maybeApplyInitialState();
 				},
@@ -674,6 +705,8 @@ export const Terminal = ({
 		maybeApplyInitialState,
 		flushPendingEvents,
 		setConnectionError,
+		setIsRestoredMode,
+		setRestoredCwd,
 	]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: refs (createOrAttachRef, resizeRef) used intentionally to read latest values without recreating callback
@@ -794,7 +827,17 @@ export const Terminal = ({
 				description: message,
 			});
 
-			if (event.code === "WRITE_QUEUE_FULL" || event.code === "WRITE_FAILED") {
+			// "Session not found" means daemon restarted and lost our session -
+			// promote to connection error so retry UI appears and cold restore can kick in.
+			if (
+				event.code === "WRITE_FAILED" &&
+				event.error?.includes("Session not found")
+			) {
+				setConnectionError("Session lost - click to reconnect");
+			} else if (
+				event.code === "WRITE_QUEUE_FULL" ||
+				event.code === "WRITE_FAILED"
+			) {
 				xtermRef.current.writeln(`\r\n[Terminal] ${message}`);
 			} else {
 				setConnectionError(message);
