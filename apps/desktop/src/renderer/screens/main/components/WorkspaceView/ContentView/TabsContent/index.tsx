@@ -31,6 +31,7 @@ export function TabsContent() {
 	const activeWorkspaceId = activeWorkspace?.id;
 	const allTabs = useTabsStore((s) => s.tabs);
 	const activeTabIds = useTabsStore((s) => s.activeTabIds);
+	const panes = useTabsStore((s) => s.panes);
 
 	const {
 		isSidebarOpen,

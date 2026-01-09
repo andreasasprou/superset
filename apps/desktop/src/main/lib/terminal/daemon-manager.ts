@@ -536,35 +536,41 @@ export class DaemonTerminalManager extends EventEmitter {
 
 				if (wasUncleanShutdown) {
 					const rawScrollback = await historyReader.readScrollback();
-					const scrollback =
-						rawScrollback.length > MAX_SCROLLBACK_CHARS
-							? rawScrollback.slice(-MAX_SCROLLBACK_CHARS)
-							: rawScrollback;
+					// Handle null scrollback (no history available)
+					if (!rawScrollback) {
+						historyReader.cleanup();
+						// Fall through to create new session
+					} else {
+						const scrollback =
+							rawScrollback.length > MAX_SCROLLBACK_CHARS
+								? rawScrollback.slice(-MAX_SCROLLBACK_CHARS)
+								: rawScrollback;
 
-					// Store sticky info so StrictMode remounts still show cold restore.
-					this.coldRestoreInfo.set(paneId, {
-						scrollback,
-						previousCwd: metadata.cwd,
-						cols: metadata.cols || cols,
-						rows: metadata.rows || rows,
-					});
-
-					return {
-						isNew: false,
-						scrollback,
-						wasRecovered: true,
-						isColdRestore: true,
-						previousCwd: metadata.cwd,
-						snapshot: {
-							snapshotAnsi: scrollback,
-							rehydrateSequences: "",
-							cwd: metadata.cwd,
-							modes: {},
+						// Store sticky info so StrictMode remounts still show cold restore.
+						this.coldRestoreInfo.set(paneId, {
+							scrollback,
+							previousCwd: metadata.cwd,
 							cols: metadata.cols || cols,
 							rows: metadata.rows || rows,
-							scrollbackLines: 0,
-						},
-					};
+						});
+
+						return {
+							isNew: false,
+							scrollback,
+							wasRecovered: true,
+							isColdRestore: true,
+							previousCwd: metadata.cwd,
+							snapshot: {
+								snapshotAnsi: scrollback,
+								rehydrateSequences: "",
+								cwd: metadata.cwd,
+								modes: {},
+								cols: metadata.cols || cols,
+								rows: metadata.rows || rows,
+								scrollbackLines: 0,
+							},
+						};
+					}
 				}
 			}
 

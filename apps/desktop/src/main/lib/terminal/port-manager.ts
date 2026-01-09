@@ -6,8 +6,27 @@ import type { TerminalSession } from "./types";
 // How often to poll for port changes (in ms)
 const SCAN_INTERVAL_MS = 2500;
 
+// Delay before scanning after a port hint is detected (in ms)
+const HINT_SCAN_DELAY_MS = 500;
+
 // Ports to ignore (common system ports that are usually not dev servers)
 const IGNORED_PORTS = new Set([22, 80, 443, 5432, 3306, 6379, 27017]);
+
+/**
+ * Check if terminal output contains hints that a port may have been opened.
+ * Common patterns from dev servers, test frameworks, etc.
+ */
+function containsPortHint(data: string): boolean {
+	// Common patterns: "listening on port X", "server started on :X", etc.
+	const portPatterns = [
+		/listening\s+on\s+(?:port\s+)?(\d+)/i,
+		/server\s+(?:started|running)\s+(?:on|at)\s+(?:http:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0)?:?(\d+)/i,
+		/ready\s+on\s+(?:http:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0)?:?(\d+)/i,
+		/port\s+(\d+)/i,
+		/:(\d{4,5})\s*$/,
+	];
+	return portPatterns.some((pattern) => pattern.test(data));
+}
 
 interface RegisteredSession {
 	session: TerminalSession;
@@ -90,6 +109,26 @@ class PortManager extends EventEmitter {
 	}
 
 	/**
+	 * Check terminal output for hints that a port may have been opened.
+	 * If a hint is detected, schedule an immediate scan for that pane.
+	 */
+	checkOutputForHint(data: string, paneId: string): void {
+		if (!containsPortHint(data)) return;
+
+		const existing = this.pendingHintScans.get(paneId);
+		if (existing) {
+			clearTimeout(existing);
+		}
+
+		const timeout = setTimeout(() => {
+			this.pendingHintScans.delete(paneId);
+			this.scanPane(paneId).catch(() => {});
+		}, HINT_SCAN_DELAY_MS);
+
+		this.pendingHintScans.set(paneId, timeout);
+	}
+
+	/**
 	 * Start periodic scanning of all registered sessions
 	 */
 	private startPeriodicScan(): void {
@@ -140,7 +179,7 @@ class PortManager extends EventEmitter {
 					return;
 				}
 
-				const portInfos = getListeningPortsForPids(pids);
+				const portInfos = await getListeningPortsForPids(pids);
 				this.updatePortsForPane(paneId, workspaceId, portInfos);
 			} catch (error) {
 				console.error(`[PortManager] Error scanning pane ${paneId}:`, error);
@@ -163,7 +202,7 @@ class PortManager extends EventEmitter {
 					return;
 				}
 
-				const portInfos = getListeningPortsForPids(pids);
+				const portInfos = await getListeningPortsForPids(pids);
 				this.updatePortsForPane(paneId, workspaceId, portInfos);
 			} catch (error) {
 				console.error(
