@@ -559,8 +559,9 @@ export class DaemonTerminalManager extends EventEmitter {
 
 				if (wasUncleanShutdown) {
 					const rawScrollback = await historyReader.readScrollback();
-					// Handle null scrollback (no history available)
-					if (!rawScrollback) {
+					// Handle null scrollback (no history available).
+					// Note: empty string is valid (TUI apps in alt screen may have empty normal buffer).
+					if (rawScrollback === null) {
 						historyReader.cleanup();
 						// Fall through to create new session
 					} else {

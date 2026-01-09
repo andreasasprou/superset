@@ -680,6 +680,10 @@ export const Terminal = ({
 			},
 			{
 				onSuccess: (result) => {
+					// Use fresh xterm ref in case component remounted during async operation
+					const currentXterm = xtermRef.current;
+					if (!currentXterm) return;
+
 					setConnectionError(null);
 
 					// Handle cold restore on retry (daemon lost session, disk history available)
@@ -695,9 +699,9 @@ export const Terminal = ({
 						setRestoredCwd(result.previousCwd || null);
 
 						// Clear retry message and write scrollback
-						xterm.clear();
+						currentXterm.clear();
 						if (scrollback) {
-							xterm.write(scrollback);
+							currentXterm.write(scrollback);
 						}
 
 						// Don't enable streaming - user must click Start Shell
@@ -711,7 +715,7 @@ export const Terminal = ({
 
 					// Re-focus terminal after successful reconnection (non-cold-restore)
 					if (isFocusedRef.current) {
-						xterm.focus();
+						currentXterm.focus();
 					}
 				},
 				onError: (error) => {
