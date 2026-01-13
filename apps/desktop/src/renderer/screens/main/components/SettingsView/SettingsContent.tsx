@@ -7,6 +7,7 @@ import { PresetsSettings } from "./PresetsSettings";
 import { ProjectSettings } from "./ProjectSettings";
 import { RingtonesSettings } from "./RingtonesSettings";
 import { TeamSettings } from "./TeamSettings";
+import { TerminalSettings } from "./TerminalSettings";
 import { WorkspaceSettings } from "./WorkspaceSettings";
 
 interface SettingsContentProps {
@@ -25,6 +26,7 @@ export function SettingsContent({ activeSection }: SettingsContentProps) {
 			{activeSection === "keyboard" && <KeyboardShortcutsSettings />}
 			{activeSection === "presets" && <PresetsSettings />}
 			{activeSection === "behavior" && <BehaviorSettings />}
+			{activeSection === "terminal" && <TerminalSettings />}
 		</div>
 	);
 }

@@ -11,7 +11,8 @@ export type SettingsSection =
 	| "keyboard"
 	| "presets"
 	| "ringtones"
-	| "behavior";
+	| "behavior"
+	| "terminal";
 
 interface AppState {
 	currentView: AppView;

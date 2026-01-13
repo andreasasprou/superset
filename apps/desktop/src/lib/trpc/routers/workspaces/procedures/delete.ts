@@ -1,6 +1,6 @@
 import type { SelectWorktree } from "@superset/local-db";
 import { track } from "main/lib/analytics";
-import { terminalManager } from "main/lib/terminal";
+import { getActiveTerminalManager } from "main/lib/terminal";
 import { workspaceInitManager } from "main/lib/workspace-init-manager";
 import { z } from "zod";
 import { publicProcedure, router } from "../../..";
@@ -59,7 +59,9 @@ export const createDeleteProcedures = () => {
 				}
 
 				const activeTerminalCount =
-					terminalManager.getSessionCountByWorkspaceId(input.id);
+					await getActiveTerminalManager().getSessionCountByWorkspaceId(
+						input.id,
+					);
 
 				// Branch workspaces are non-destructive to close - no git checks needed
 				if (workspace.type === "branch") {
@@ -184,9 +186,9 @@ export const createDeleteProcedures = () => {
 					}
 				}
 
-				const terminalResult = await terminalManager.killByWorkspaceId(
-					input.id,
-				);
+				// Kill all terminal processes in this workspace first
+				const terminalResult =
+					await getActiveTerminalManager().killByWorkspaceId(input.id);
 
 				const project = getProject(workspace.projectId);
 
@@ -275,9 +277,8 @@ export const createDeleteProcedures = () => {
 					throw new Error("Workspace not found");
 				}
 
-				const terminalResult = await terminalManager.killByWorkspaceId(
-					input.id,
-				);
+				const terminalResult =
+					await getActiveTerminalManager().killByWorkspaceId(input.id);
 
 				deleteWorkspace(input.id); // keeps worktree on disk
 				hideProjectIfNoWorkspaces(workspace.projectId);
