@@ -267,12 +267,56 @@ export const createTerminalRouter = () => {
 		killAllDaemonSessions: publicProcedure.mutation(async () => {
 			// Use capability-based check instead of instanceof
 			if (!terminal.management) {
-				return { daemonModeEnabled: false, killedCount: 0 };
+				return { daemonModeEnabled: false, killedCount: 0, remainingCount: 0 };
 			}
 
-			const { sessions } = await terminal.management.listSessions();
+			// Get sessions before kill for accurate count
+			const before = await terminal.management.listSessions();
+			const beforeIds = before.sessions.map((s) => s.sessionId);
+			console.log(
+				"[killAllDaemonSessions] Before kill:",
+				beforeIds.length,
+				"sessions",
+				beforeIds,
+			);
+
+			// Request kill of all sessions
 			await terminal.management.killAllSessions();
-			return { daemonModeEnabled: true, killedCount: sessions.length };
+
+			// Wait and verify loop - poll until sessions are actually dead
+			// This ensures we don't return success before daemon has finished cleanup
+			const MAX_RETRIES = 10;
+			const RETRY_DELAY_MS = 100;
+			let remainingCount = before.sessions.length;
+			let afterIds: string[] = [];
+
+			for (let i = 0; i < MAX_RETRIES && remainingCount > 0; i++) {
+				await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+				const after = await terminal.management.listSessions();
+				afterIds = after.sessions
+					.filter((s) => s.isAlive)
+					.map((s) => s.sessionId);
+				remainingCount = afterIds.length;
+
+				if (remainingCount > 0) {
+					console.log(
+						`[killAllDaemonSessions] Retry ${i + 1}/${MAX_RETRIES}: ${remainingCount} sessions still alive`,
+						afterIds,
+					);
+				}
+			}
+
+			const killedCount = before.sessions.length - remainingCount;
+			console.log(
+				"[killAllDaemonSessions] Complete:",
+				killedCount,
+				"killed,",
+				remainingCount,
+				"remaining",
+				remainingCount > 0 ? afterIds : [],
+			);
+
+			return { daemonModeEnabled: true, killedCount, remainingCount };
 		}),
 
 		killDaemonSessionsForWorkspace: publicProcedure

@@ -78,22 +78,53 @@ function TerminalSettingsPage() {
 
 	const killAllDaemonSessions = trpc.terminal.killAllDaemonSessions.useMutation(
 		{
+			onMutate: async () => {
+				// Cancel outgoing fetches to avoid race conditions
+				await utils.terminal.listDaemonSessions.cancel();
+				// Snapshot previous data for rollback
+				const previous = utils.terminal.listDaemonSessions.getData();
+				// Optimistically clear the list immediately for instant UI feedback
+				utils.terminal.listDaemonSessions.setData(undefined, {
+					daemonModeEnabled: true,
+					sessions: [],
+				});
+				return { previous };
+			},
 			onSuccess: (result) => {
 				if (result.daemonModeEnabled) {
-					toast.success("Killed all terminal sessions", {
-						description: `${result.killedCount} sessions terminated`,
-					});
+					if (result.remainingCount > 0) {
+						toast.warning("Some sessions could not be killed", {
+							description: `${result.killedCount} terminated, ${result.remainingCount} remaining`,
+						});
+					} else {
+						toast.success("Killed all terminal sessions", {
+							description: `${result.killedCount} sessions terminated`,
+						});
+					}
 				} else {
 					toast.error("Terminal persistence is not active", {
 						description: "Restart the app after enabling terminal persistence.",
 					});
 				}
-				utils.terminal.listDaemonSessions.invalidate();
 			},
-			onError: (error) => {
+			onError: (error, _vars, context) => {
+				// Rollback on error
+				if (context?.previous) {
+					utils.terminal.listDaemonSessions.setData(
+						undefined,
+						context.previous,
+					);
+				}
 				toast.error("Failed to kill sessions", {
 					description: error.message,
 				});
+			},
+			onSettled: () => {
+				// Always refetch to get actual state after mutation settles
+				// Small delay to allow daemon to finish cleanup
+				setTimeout(() => {
+					utils.terminal.listDaemonSessions.invalidate();
+				}, 300);
 			},
 		},
 	);
