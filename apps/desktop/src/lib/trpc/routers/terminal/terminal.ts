@@ -295,7 +295,9 @@ export const createTerminalRouter = () => {
 			// Get sessions before kill for accurate count
 			const before = await terminal.management.listSessions();
 			const beforeIds = before.sessions.map((s) => s.sessionId);
-			beforeIds.forEach((id) => userKilledSessions.add(id));
+			for (const id of beforeIds) {
+				userKilledSessions.add(id);
+			}
 			console.log(
 				"[killAllDaemonSessions] Before kill:",
 				beforeIds.length,

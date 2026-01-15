@@ -12,7 +12,7 @@ import { toast } from "@superset/ui/sonner";
 import { Switch } from "@superset/ui/switch";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { trpc } from "renderer/lib/trpc";
+import { electronTrpc } from "renderer/lib/electron-trpc";
 import { markTerminalKilledByUser } from "renderer/lib/terminal-kill-tracking";
 import { DEFAULT_TERMINAL_PERSISTENCE } from "shared/constants";
 
@@ -21,11 +21,12 @@ export const Route = createFileRoute("/_authenticated/settings/terminal/")({
 });
 
 function TerminalSettingsPage() {
-	const utils = trpc.useUtils();
+	const utils = electronTrpc.useUtils();
 	const { data: terminalPersistence, isLoading } =
-		trpc.settings.getTerminalPersistence.useQuery();
+		electronTrpc.settings.getTerminalPersistence.useQuery();
 
-	const { data: daemonSessions } = trpc.terminal.listDaemonSessions.useQuery();
+	const { data: daemonSessions } =
+		electronTrpc.terminal.listDaemonSessions.useQuery();
 	const daemonModeEnabled = daemonSessions?.daemonModeEnabled ?? false;
 	const sessions = daemonSessions?.sessions ?? [];
 	const aliveSessions = sessions.filter((session) => session.isAlive);
@@ -49,7 +50,7 @@ function TerminalSettingsPage() {
 		workspaceId: string;
 	} | null>(null);
 	const setTerminalPersistence =
-		trpc.settings.setTerminalPersistence.useMutation({
+		electronTrpc.settings.setTerminalPersistence.useMutation({
 			onMutate: async ({ enabled }) => {
 				// Cancel outgoing fetches
 				await utils.settings.getTerminalPersistence.cancel();
@@ -78,8 +79,8 @@ function TerminalSettingsPage() {
 		setTerminalPersistence.mutate({ enabled });
 	};
 
-	const killAllDaemonSessions = trpc.terminal.killAllDaemonSessions.useMutation(
-		{
+	const killAllDaemonSessions =
+		electronTrpc.terminal.killAllDaemonSessions.useMutation({
 			onMutate: async () => {
 				// Cancel outgoing fetches to avoid race conditions
 				await utils.terminal.listDaemonSessions.cancel();
@@ -128,22 +129,22 @@ function TerminalSettingsPage() {
 					utils.terminal.listDaemonSessions.invalidate();
 				}, 300);
 			},
-		},
-	);
+		});
 
-	const clearTerminalHistory = trpc.terminal.clearTerminalHistory.useMutation({
-		onSuccess: () => {
-			toast.success("Cleared terminal history");
-			utils.terminal.listDaemonSessions.invalidate();
-		},
-		onError: (error) => {
-			toast.error("Failed to clear terminal history", {
-				description: error.message,
-			});
-		},
-	});
+	const clearTerminalHistory =
+		electronTrpc.terminal.clearTerminalHistory.useMutation({
+			onSuccess: () => {
+				toast.success("Cleared terminal history");
+				utils.terminal.listDaemonSessions.invalidate();
+			},
+			onError: (error) => {
+				toast.error("Failed to clear terminal history", {
+					description: error.message,
+				});
+			},
+		});
 
-	const killDaemonSession = trpc.terminal.kill.useMutation({
+	const killDaemonSession = electronTrpc.terminal.kill.useMutation({
 		onSuccess: () => {
 			toast.success("Killed terminal session");
 			utils.terminal.listDaemonSessions.invalidate();
@@ -361,9 +362,9 @@ function TerminalSettingsPage() {
 							disabled={killAllDaemonSessions.isPending}
 							onClick={() => {
 								setConfirmKillAllOpen(false);
-								sessions.forEach((session) =>
-									markTerminalKilledByUser(session.sessionId),
-								);
+								for (const session of sessions) {
+									markTerminalKilledByUser(session.sessionId);
+								}
 								killAllDaemonSessions.mutate();
 							}}
 						>

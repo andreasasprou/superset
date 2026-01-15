@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { trpc } from "renderer/lib/trpc";
+import { electronTrpc } from "renderer/lib/electron-trpc";
 
 export interface UseTerminalConnectionOptions {
 	workspaceId: string;
@@ -23,15 +23,17 @@ export function useTerminalConnection({
 	const [connectionError, setConnectionError] = useState<string | null>(null);
 
 	// tRPC mutations
-	const createOrAttachMutation = trpc.terminal.createOrAttach.useMutation();
-	const writeMutation = trpc.terminal.write.useMutation();
-	const resizeMutation = trpc.terminal.resize.useMutation();
-	const detachMutation = trpc.terminal.detach.useMutation();
-	const clearScrollbackMutation = trpc.terminal.clearScrollback.useMutation();
+	const createOrAttachMutation =
+		electronTrpc.terminal.createOrAttach.useMutation();
+	const writeMutation = electronTrpc.terminal.write.useMutation();
+	const resizeMutation = electronTrpc.terminal.resize.useMutation();
+	const detachMutation = electronTrpc.terminal.detach.useMutation();
+	const clearScrollbackMutation =
+		electronTrpc.terminal.clearScrollback.useMutation();
 
 	// Query for workspace cwd
 	const { data: workspaceCwd } =
-		trpc.terminal.getWorkspaceCwd.useQuery(workspaceId);
+		electronTrpc.terminal.getWorkspaceCwd.useQuery(workspaceId);
 
 	// Stable refs to mutation functions - these don't change identity on re-render
 	const createOrAttachRef = useRef(createOrAttachMutation.mutate);

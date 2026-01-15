@@ -1,6 +1,6 @@
 import { useParams } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { trpc } from "renderer/lib/trpc";
+import { electronTrpc } from "renderer/lib/electron-trpc";
 import { useSidebarStore } from "renderer/stores";
 import {
 	MAX_SIDEBAR_WIDTH,
@@ -8,7 +8,10 @@ import {
 } from "renderer/stores/sidebar-state";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import type { Pane, Tab } from "renderer/stores/tabs/types";
-import { extractPaneIdsFromLayout } from "renderer/stores/tabs/utils";
+import {
+	extractPaneIdsFromLayout,
+	resolveActiveTabIdForWorkspace,
+} from "renderer/stores/tabs/utils";
 import { ResizablePanel } from "../../../ResizablePanel";
 import { Sidebar } from "../../Sidebar";
 import { EmptyTabView } from "./EmptyTabView";
@@ -28,10 +31,11 @@ function hasTerminalPane(tab: Tab, panes: Record<string, Pane>): boolean {
 export function TabsContent() {
 	const { workspaceId: activeWorkspaceId } = useParams({ strict: false });
 	const { data: terminalPersistence } =
-		trpc.settings.getTerminalPersistence.useQuery();
+		electronTrpc.settings.getTerminalPersistence.useQuery();
 	const allTabs = useTabsStore((s) => s.tabs);
 	const activeTabIds = useTabsStore((s) => s.activeTabIds);
 	const panes = useTabsStore((s) => s.panes);
+	const tabHistoryStacks = useTabsStore((s) => s.tabHistoryStacks);
 
 	const {
 		isSidebarOpen,
@@ -44,14 +48,18 @@ export function TabsContent() {
 	const activeTabId = useMemo(() => {
 		if (!activeWorkspaceId) return null;
 
-		// Prefer the store's active tab, but fall back to the first tab to avoid a
-		// blank render when activeTabIds isn't hydrated yet.
-		return (
-			activeTabIds[activeWorkspaceId] ??
-			allTabs.find((tab) => tab.workspaceId === activeWorkspaceId)?.id ??
-			null
-		);
-	}, [activeWorkspaceId, activeTabIds, allTabs]);
+		const resolvedActiveTabId = resolveActiveTabIdForWorkspace({
+			workspaceId: activeWorkspaceId,
+			tabs: allTabs,
+			activeTabIds,
+			tabHistoryStacks,
+		});
+		if (!resolvedActiveTabId) return null;
+
+		const tab = allTabs.find((t) => t.id === resolvedActiveTabId) || null;
+		if (!tab || tab.workspaceId !== activeWorkspaceId) return null;
+		return resolvedActiveTabId;
+	}, [activeWorkspaceId, activeTabIds, allTabs, tabHistoryStacks]);
 
 	const tabToRender = useMemo(() => {
 		if (!activeTabId) return null;

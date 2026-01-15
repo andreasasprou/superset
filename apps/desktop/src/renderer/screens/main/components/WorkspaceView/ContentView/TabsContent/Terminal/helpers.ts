@@ -8,7 +8,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import type { ITheme } from "@xterm/xterm";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { debounce } from "lodash";
-import { trpcClient } from "renderer/lib/trpc-client";
+import { electronTrpcClient as trpcClient } from "renderer/lib/trpc-client";
 import { getHotkeyKeys, isAppHotkeyEvent } from "renderer/stores/hotkeys";
 import { toXtermTheme } from "renderer/stores/theme/utils";
 import { isTerminalReservedEvent, matchesHotkeyEvent } from "shared/hotkeys";
@@ -120,7 +120,17 @@ function loadRenderer(xterm: XTerm): TerminalRenderer {
 		webglAddon.onContextLoss(() => {
 			webglAddon?.dispose();
 			webglAddon = null;
-			tryLoadCanvas();
+			try {
+				renderer = new CanvasAddon();
+				xterm.loadAddon(renderer);
+				kind = "canvas";
+				// Force refresh after context loss recovery
+				xterm.refresh(0, xterm.rows - 1);
+			} catch {
+				// Canvas fallback failed, use default renderer
+				renderer = null;
+				kind = "dom";
+			}
 		});
 
 		xterm.loadAddon(webglAddon);

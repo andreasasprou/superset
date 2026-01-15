@@ -1,7 +1,6 @@
 import "react-mosaic-component/react-mosaic-component.css";
 import "./mosaic-theme.css";
 
-import { useParams } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo } from "react";
 import {
 	Mosaic,
@@ -9,7 +8,7 @@ import {
 	type MosaicNode,
 } from "react-mosaic-component";
 import { dragDropManager } from "renderer/lib/dnd";
-import { trpc } from "renderer/lib/trpc";
+import { electronTrpc } from "renderer/lib/electron-trpc";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import type { Tab } from "renderer/stores/tabs/types";
 import { useTabsWithPresets } from "renderer/stores/tabs/useTabsWithPresets";
@@ -39,10 +38,9 @@ export function TabView({ tab, isTabVisible = true }: TabViewProps) {
 	const allPanes = useTabsStore((s) => s.panes);
 
 	// Get workspace path for file viewer panes
-	const { workspaceId } = useParams({ strict: false });
-	const { data: workspace } = trpc.workspaces.get.useQuery(
-		{ id: workspaceId ?? "" },
-		{ enabled: !!workspaceId },
+	const { data: workspace } = electronTrpc.workspaces.get.useQuery(
+		{ id: tab.workspaceId },
+		{ enabled: !!tab.workspaceId },
 	);
 	const worktreePath = workspace?.worktreePath ?? "";
 
