@@ -4,21 +4,24 @@ initSentry();
 
 import path from "node:path";
 import { settings } from "@superset/local-db";
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, net, protocol } from "electron";
 import { makeAppSetup } from "lib/electron-app/factories/app/setup";
+import {
+	handleAuthCallback,
+	parseAuthDeepLink,
+} from "lib/trpc/routers/auth/utils/auth-functions";
 import { DEFAULT_CONFIRM_ON_QUIT, PROTOCOL_SCHEME } from "shared/constants";
 import { setupAgentHooks } from "./lib/agent-setup";
 import { posthog } from "./lib/analytics";
 import { initAppState } from "./lib/app-state";
-import { authService, parseAuthDeepLink } from "./lib/auth";
 import { setupAutoUpdater } from "./lib/auto-updater";
 import { localDb } from "./lib/local-db";
 import { ensureShellEnvVars } from "./lib/shell-env";
 import {
-	getActiveTerminalManager,
 	reconcileDaemonSessions,
 	shutdownOrphanedDaemon,
 } from "./lib/terminal";
+import { getWorkspaceRuntimeRegistry } from "./lib/workspace-runtime";
 import { MainWindow } from "./windows/main";
 
 // Initialize local SQLite database (runs migrations + legacy data migration on import)
@@ -45,7 +48,7 @@ async function processDeepLink(url: string): Promise<void> {
 	const authParams = parseAuthDeepLink(url);
 	if (!authParams) return;
 
-	const result = await authService.handleAuthCallback(authParams);
+	const result = await handleAuthCallback(authParams);
 	if (result.success) {
 		focusMainWindow();
 	} else {
@@ -174,7 +177,7 @@ app.on("before-quit", async (event) => {
 
 	try {
 		await Promise.all([
-			getActiveTerminalManager().cleanup(),
+			getWorkspaceRuntimeRegistry().getDefault().terminal.cleanup(),
 			posthog?.shutdown(),
 		]);
 	} finally {
@@ -212,6 +215,31 @@ if (!gotTheLock) {
 	(async () => {
 		await app.whenReady();
 
+		// Register custom protocol to serve app files in production
+		// This provides a stable origin (superset://app or superset-dev://app) for Better Auth CORS
+		if (process.env.NODE_ENV !== "development") {
+			console.log(
+				`[main] Registering protocol handler for: ${PROTOCOL_SCHEME}`,
+			);
+			console.log(`[main] __dirname: ${__dirname}`);
+			console.log(
+				`[main] Renderer path: ${path.join(__dirname, "../renderer")}`,
+			);
+
+			protocol.handle(PROTOCOL_SCHEME, (request) => {
+				// Parse URL to extract pathname (e.g., superset://app/index.html#/ -> /index.html)
+				const parsedUrl = new URL(request.url);
+				const pathname = parsedUrl.pathname;
+				const filePath = path.normalize(
+					path.join(__dirname, "../renderer", pathname),
+				);
+				console.log(`[protocol] Request: ${request.url}`);
+				console.log(`[protocol] Pathname: ${pathname}`);
+				console.log(`[protocol] Resolved file path: ${filePath}`);
+				return net.fetch(`file://${filePath}`);
+			});
+		}
+
 		await initAppState();
 
 		// Clean up stale daemon sessions from previous app runs
@@ -221,8 +249,6 @@ if (!gotTheLock) {
 		// Shutdown orphaned daemon if persistence is disabled
 		// (cleans up daemon left from previous session with persistence enabled)
 		await shutdownOrphanedDaemon();
-
-		await authService.initialize();
 
 		// Resolve shell environment before setting up agent hooks
 		// This ensures ZDOTDIR and PATH are available for terminal initialization

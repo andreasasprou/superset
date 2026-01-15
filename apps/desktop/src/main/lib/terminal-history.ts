@@ -16,7 +16,7 @@
 
 import { createWriteStream, promises as fs, type WriteStream } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { SUPERSET_DIR_NAME } from "shared/constants";
 
 const MAX_HISTORY_BYTES = 5 * 1024 * 1024; // 5MB per session
@@ -70,8 +70,34 @@ export function getTerminalHistoryRootDir(): string {
 	return join(homedir(), SUPERSET_DIR_NAME, TERMINAL_HISTORY_DIR_NAME);
 }
 
+function assertSafeIdSegment(label: string, value: string): void {
+	if (!value || value.trim().length === 0) {
+		throw new Error(`[terminal-history] ${label} must be non-empty`);
+	}
+	if (value.includes("/") || value.includes("\\") || value.includes("..")) {
+		throw new Error(
+			`[terminal-history] ${label} contains invalid path characters`,
+		);
+	}
+}
+
+function resolveHistoryDir(workspaceId: string, paneId: string): string {
+	assertSafeIdSegment("workspaceId", workspaceId);
+	assertSafeIdSegment("paneId", paneId);
+
+	const root = resolve(getTerminalHistoryRootDir());
+	const dir = resolve(root, workspaceId, paneId);
+	const rel = relative(root, dir);
+
+	if (rel.split(sep).includes("..")) {
+		throw new Error("[terminal-history] Resolved history dir escapes root");
+	}
+
+	return dir;
+}
+
 function getHistoryDir(workspaceId: string, paneId: string): string {
-	return join(getTerminalHistoryRootDir(), workspaceId, paneId);
+	return resolveHistoryDir(workspaceId, paneId);
 }
 
 function getScrollbackPath(workspaceId: string, paneId: string): string {

@@ -19,8 +19,12 @@ export function ensureSupersetHomeDirExists(): void {
 	// Best-effort repair if the directory already existed with weak permissions.
 	try {
 		chmodSync(SUPERSET_HOME_DIR, SUPERSET_HOME_DIR_MODE);
-	} catch {
-		// Ignore - may fail if not owner / filesystem restrictions.
+	} catch (error) {
+		console.warn(
+			"[app-environment] Failed to chmod Superset home dir (best-effort):",
+			SUPERSET_HOME_DIR,
+			error,
+		);
 	}
 }
 

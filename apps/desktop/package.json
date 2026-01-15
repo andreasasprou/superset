@@ -2,7 +2,7 @@
 	"name": "@superset/desktop",
 	"productName": "Superset",
 	"description": "The last developer tool you'll ever need",
-	"version": "0.0.54",
+	"version": "0.0.56",
 	"main": "./dist/main/index.js",
 	"resources": "src/resources",
 	"repository": {
@@ -70,6 +70,7 @@
 		"@xterm/addon-webgl": "^0.18.0",
 		"@xterm/headless": "^5.5.0",
 		"@xterm/xterm": "^5.5.0",
+		"better-auth": "^1.4.9",
 		"better-sqlite3": "12.5.0",
 		"bindings": "^1.5.0",
 		"clsx": "^2.1.1",

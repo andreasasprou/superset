@@ -17,6 +17,8 @@ import type {
 	TerminalSession,
 } from "./types";
 
+const DEBUG_TERMINAL = process.env.SUPERSET_TERMINAL_DEBUG === "1";
+
 export class TerminalManager extends EventEmitter {
 	private sessions = new Map<string, TerminalSession>();
 	private pendingSessions = new Map<string, Promise<SessionResult>>();
@@ -41,7 +43,6 @@ export class TerminalManager extends EventEmitter {
 				isNew: false,
 				scrollback: getSerializedScrollback(existing),
 				wasRecovered: existing.wasRecovered,
-				viewportY: existing.viewportY,
 			};
 		}
 
@@ -112,14 +113,17 @@ export class TerminalManager extends EventEmitter {
 
 		session.pty.onExit(async ({ exitCode, signal }) => {
 			const sessionDuration = Date.now() - session.startTime;
-			console.log("[TerminalManager] Shell exited:", {
+			const logPayload: Record<string, unknown> = {
 				paneId,
 				shell: session.shell,
 				exitCode,
 				signal,
 				sessionDuration,
-				cwd: session.cwd,
-			});
+			};
+			if (DEBUG_TERMINAL) {
+				logPayload.cwd = session.cwd;
+			}
+			console.log("[TerminalManager] Shell exited:", logPayload);
 
 			session.isAlive = false;
 			session.writeQueue.dispose();
@@ -261,7 +265,7 @@ export class TerminalManager extends EventEmitter {
 	}
 
 	detach(params: { paneId: string; viewportY?: number }): void {
-		const { paneId, viewportY } = params;
+		const { paneId } = params;
 		const session = this.sessions.get(paneId);
 
 		if (!session) {
@@ -270,9 +274,6 @@ export class TerminalManager extends EventEmitter {
 		}
 
 		session.lastActive = Date.now();
-		if (viewportY !== undefined) {
-			session.viewportY = viewportY;
-		}
 	}
 
 	clearScrollback(params: { paneId: string }): void {

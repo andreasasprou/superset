@@ -8,6 +8,7 @@ import {
 	DropdownMenuTrigger,
 } from "@superset/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@superset/ui/tooltip";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
 	HiMiniChevronDown,
@@ -21,21 +22,20 @@ import {
 	useIsDarkTheme,
 } from "renderer/assets/app-icons/preset-icons";
 import { HotkeyTooltipContent } from "renderer/components/HotkeyTooltipContent";
-import { trpc } from "renderer/lib/trpc";
 import { usePresets } from "renderer/react-query/presets";
-import { useOpenSettings } from "renderer/stores";
 import { useTabsStore } from "renderer/stores/tabs/store";
 import { useTabsWithPresets } from "renderer/stores/tabs/useTabsWithPresets";
+import { resolveActiveTabIdForWorkspace } from "renderer/stores/tabs/utils";
 import { type ActivePaneStatus, pickHigherStatus } from "shared/tabs-types";
 import { GroupItem } from "./GroupItem";
 
 export function GroupStrip() {
-	const { data: activeWorkspace } = trpc.workspaces.getActive.useQuery();
-	const activeWorkspaceId = activeWorkspace?.id;
+	const { workspaceId: activeWorkspaceId } = useParams({ strict: false });
 
 	const allTabs = useTabsStore((s) => s.tabs);
 	const panes = useTabsStore((s) => s.panes);
 	const activeTabIds = useTabsStore((s) => s.activeTabIds);
+	const tabHistoryStacks = useTabsStore((s) => s.tabHistoryStacks);
 	const { addTab } = useTabsWithPresets();
 	const renameTab = useTabsStore((s) => s.renameTab);
 	const removeTab = useTabsStore((s) => s.removeTab);
@@ -43,7 +43,7 @@ export function GroupStrip() {
 
 	const { presets } = usePresets();
 	const isDark = useIsDarkTheme();
-	const openSettings = useOpenSettings();
+	const navigate = useNavigate();
 	const [dropdownOpen, setDropdownOpen] = useState(false);
 	const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -73,9 +73,15 @@ export function GroupStrip() {
 		[activeWorkspaceId, allTabs],
 	);
 
-	const activeTabId = activeWorkspaceId
-		? activeTabIds[activeWorkspaceId]
-		: null;
+	const activeTabId = useMemo(() => {
+		if (!activeWorkspaceId) return null;
+		return resolveActiveTabIdForWorkspace({
+			workspaceId: activeWorkspaceId,
+			tabs: allTabs,
+			activeTabIds,
+			tabHistoryStacks,
+		});
+	}, [activeWorkspaceId, activeTabIds, allTabs, tabHistoryStacks]);
 
 	// Compute aggregate status per tab using shared priority logic
 	const tabStatusMap = useMemo(() => {
@@ -111,7 +117,7 @@ export function GroupStrip() {
 	};
 
 	const handleOpenPresetsSettings = () => {
-		openSettings("presets");
+		navigate({ to: "/settings/presets" });
 		setDropdownOpen(false);
 	};
 

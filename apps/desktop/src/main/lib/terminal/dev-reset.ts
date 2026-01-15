@@ -34,12 +34,25 @@ export async function resetTerminalStateDev(): Promise<void> {
 
 	for (const relativePath of TERMINAL_STATE_PATHS) {
 		const fullPath = join(SUPERSET_HOME_DIR, relativePath);
-		await rm(fullPath, { recursive: true, force: true }).catch(() => {});
+		await rm(fullPath, { recursive: true, force: true }).catch((error) => {
+			console.warn(
+				"[dev/reset-terminal-state] Failed to remove state path:",
+				fullPath,
+				error,
+			);
+		});
 	}
 
 	// Clear tabs/panes so we don't immediately try to restore a large terminal set.
 	appState.data.tabsState = defaultAppState.tabsState;
-	await appState.write();
+	try {
+		await appState.write();
+	} catch (error) {
+		console.warn(
+			"[dev/reset-terminal-state] Failed to persist app state reset:",
+			error,
+		);
+	}
 
 	console.log("[dev/reset-terminal-state] Done.");
 }

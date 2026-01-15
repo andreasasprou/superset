@@ -50,3 +50,8 @@ export const NOTIFICATION_EVENTS = {
 export const DEFAULT_CONFIRM_ON_QUIT = true;
 export const DEFAULT_TERMINAL_LINK_BEHAVIOR = "external-editor" as const;
 export const DEFAULT_TERMINAL_PERSISTENCE = false;
+
+// External links (documentation, help resources, etc.)
+export const EXTERNAL_LINKS = {
+	SETUP_TEARDOWN_SCRIPTS: `${process.env.NEXT_PUBLIC_DOCS_URL}/setup-teardown-scripts`,
+} as const;

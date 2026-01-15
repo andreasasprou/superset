@@ -13,7 +13,7 @@ import {
 	LuFolderGit2,
 	LuRotateCw,
 } from "react-icons/lu";
-import { trpc } from "renderer/lib/trpc";
+import { electronTrpc } from "renderer/lib/electron-trpc";
 import { useWorkspaceDeleteHandler } from "renderer/react-query/workspaces/useWorkspaceDeleteHandler";
 import { STROKE_WIDTH } from "../../WorkspaceSidebar/constants";
 import { DeleteWorkspaceDialog } from "../../WorkspaceSidebar/WorkspaceListItem/components/DeleteWorkspaceDialog/DeleteWorkspaceDialog";
@@ -25,7 +25,6 @@ const GITHUB_STATUS_STALE_TIME = 5 * 60 * 1000; // 5 minutes
 
 interface WorkspaceRowProps {
 	workspace: WorkspaceItem;
-	isActive: boolean;
 	onSwitch: () => void;
 	onReopen: () => void;
 	isOpening?: boolean;
@@ -33,7 +32,6 @@ interface WorkspaceRowProps {
 
 export function WorkspaceRow({
 	workspace,
-	isActive,
 	onSwitch,
 	onReopen,
 	isOpening,
@@ -44,14 +42,17 @@ export function WorkspaceRow({
 		useWorkspaceDeleteHandler();
 
 	// Lazy-load GitHub status on hover to avoid N+1 queries
-	const { data: githubStatus } = trpc.workspaces.getGitHubStatus.useQuery(
-		{ workspaceId: workspace.workspaceId ?? "" },
-		{
-			enabled:
-				hasHovered && workspace.type === "worktree" && !!workspace.workspaceId,
-			staleTime: GITHUB_STATUS_STALE_TIME,
-		},
-	);
+	const { data: githubStatus } =
+		electronTrpc.workspaces.getGitHubStatus.useQuery(
+			{ workspaceId: workspace.workspaceId ?? "" },
+			{
+				enabled:
+					hasHovered &&
+					workspace.type === "worktree" &&
+					!!workspace.workspaceId,
+				staleTime: GITHUB_STATUS_STALE_TIME,
+			},
+		);
 
 	const pr = githubStatus?.pr;
 	const showDiffStats = pr && (pr.additions > 0 || pr.deletions > 0);
@@ -77,7 +78,6 @@ export function WorkspaceRow({
 			className={cn(
 				"flex items-center gap-3 w-full px-4 py-2 group text-left",
 				"hover:bg-background/50 transition-colors",
-				isActive && "bg-background/70",
 				isOpening && "opacity-50 cursor-wait",
 			)}
 		>
@@ -125,21 +125,15 @@ export function WorkspaceRow({
 			{/* Workspace/branch name */}
 			<span
 				className={cn(
-					"text-sm truncate",
-					isActive ? "text-foreground font-medium" : "text-foreground/80",
+					"text-sm truncate text-foreground/80",
 					!workspace.isOpen && "text-foreground/50",
 				)}
 			>
 				{workspace.name}
 			</span>
 
-			{/* Active indicator */}
-			{isActive && (
-				<span className="size-1.5 rounded-full bg-emerald-500 shrink-0" />
-			)}
-
 			{/* Unread indicator */}
-			{workspace.isUnread && !isActive && (
+			{workspace.isUnread && (
 				<span className="relative flex size-2 shrink-0">
 					<span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
 					<span className="relative inline-flex size-2 rounded-full bg-red-500" />

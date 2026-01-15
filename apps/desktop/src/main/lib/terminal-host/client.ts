@@ -19,6 +19,7 @@ import {
 	mkdirSync,
 	openSync,
 	readFileSync,
+	statSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -81,6 +82,7 @@ const SPAWN_LOCK_TIMEOUT_MS = 10000; // Max time to hold spawn lock
 
 // Queue limits
 const MAX_NOTIFY_QUEUE_BYTES = 2_000_000; // 2MB cap to prevent OOM
+const MAX_DAEMON_LOG_BYTES = 5 * 1024 * 1024; // 5MB cap for daemon.log
 
 // =============================================================================
 // NDJSON Parser
@@ -492,7 +494,11 @@ export class TerminalHostClient extends EventEmitter {
 		this.streamSocket.on("data", (data: string) => {
 			const messages = this.streamParser.parse(data);
 			for (const message of messages) {
-				this.handleMessage(message);
+				try {
+					this.handleMessage(message);
+				} catch (error) {
+					this.emit("error", error);
+				}
 			}
 		});
 	}
@@ -1010,6 +1016,16 @@ export class TerminalHostClient extends EventEmitter {
 			const logPath = join(SUPERSET_HOME_DIR, "daemon.log");
 			let logFd: number;
 			try {
+				if (existsSync(logPath)) {
+					try {
+						const { size } = statSync(logPath);
+						if (size > MAX_DAEMON_LOG_BYTES) {
+							writeFileSync(logPath, "", { mode: 0o600 });
+						}
+					} catch {
+						// Best-effort.
+					}
+				}
 				logFd = openSync(logPath, "a", 0o600);
 				try {
 					chmodSync(logPath, 0o600);

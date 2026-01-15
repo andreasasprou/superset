@@ -1,11 +1,16 @@
-import { trpc } from "renderer/lib/trpc";
+import { useParams } from "@tanstack/react-router";
+import { electronTrpc } from "renderer/lib/electron-trpc";
 import { OpenInMenuButton } from "./OpenInMenuButton";
-import { SupportMenu } from "./SupportMenu";
+import { OrganizationDropdown } from "./OrganizationDropdown";
 import { WindowControls } from "./WindowControls";
 
 export function TopBar() {
-	const { data: platform } = trpc.window.getPlatform.useQuery();
-	const { data: activeWorkspace } = trpc.workspaces.getActive.useQuery();
+	const { data: platform } = electronTrpc.window.getPlatform.useQuery();
+	const { workspaceId } = useParams({ strict: false });
+	const { data: workspace } = electronTrpc.workspaces.get.useQuery(
+		{ id: workspaceId ?? "" },
+		{ enabled: !!workspaceId },
+	);
 	// Default to Mac layout while loading to avoid overlap with traffic lights
 	const isMac = platform === undefined || platform === "darwin";
 
@@ -21,13 +26,13 @@ export function TopBar() {
 			<div className="flex-1" />
 
 			<div className="flex items-center gap-3 h-full pr-4 shrink-0">
-				{activeWorkspace?.worktreePath && (
+				{workspace?.worktreePath && (
 					<OpenInMenuButton
-						worktreePath={activeWorkspace.worktreePath}
-						branch={activeWorkspace.worktree?.branch}
+						worktreePath={workspace.worktreePath}
+						branch={workspace.worktree?.branch}
 					/>
 				)}
-				<SupportMenu />
+				<OrganizationDropdown />
 				{!isMac && <WindowControls />}
 			</div>
 		</div>

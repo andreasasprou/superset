@@ -1,6 +1,6 @@
 import { toast } from "@superset/ui/sonner";
 import { useEffect, useMemo, useRef } from "react";
-import { trpc } from "renderer/lib/trpc";
+import { electronTrpc } from "renderer/lib/electron-trpc";
 import { usePortsStore } from "renderer/stores";
 import type { MergedPort } from "shared/types";
 import { mergePorts } from "../utils";
@@ -8,33 +8,32 @@ import { mergePorts } from "../utils";
 export interface MergedWorkspaceGroup {
 	workspaceId: string;
 	workspaceName: string;
-	isCurrentWorkspace: boolean;
 	ports: MergedPort[];
 }
 
 export function usePortsData() {
-	const { data: activeWorkspace } = trpc.workspaces.getActive.useQuery();
-	const { data: allWorkspaces } = trpc.workspaces.getAll.useQuery();
+	const { data: allWorkspaces } = electronTrpc.workspaces.getAll.useQuery();
 	const ports = usePortsStore((s) => s.ports);
 	const setPorts = usePortsStore((s) => s.setPorts);
 	const addPort = usePortsStore((s) => s.addPort);
 	const removePort = usePortsStore((s) => s.removePort);
 
-	const utils = trpc.useUtils();
+	const utils = electronTrpc.useUtils();
 
-	const { data: allStaticPortsData } = trpc.ports.getAllStatic.useQuery();
+	const { data: allStaticPortsData } =
+		electronTrpc.ports.getAllStatic.useQuery();
 
-	trpc.ports.subscribeStatic.useSubscription(
-		{ workspaceId: activeWorkspace?.id ?? "" },
+	// Subscribe to all static port changes
+	electronTrpc.ports.subscribeStatic.useSubscription(
+		{ workspaceId: "" },
 		{
-			enabled: !!activeWorkspace?.id,
 			onData: () => {
 				utils.ports.getAllStatic.invalidate();
 			},
 		},
 	);
 
-	const { data: initialPorts } = trpc.ports.getAll.useQuery();
+	const { data: initialPorts } = electronTrpc.ports.getAll.useQuery();
 
 	useEffect(() => {
 		if (initialPorts) {
@@ -42,7 +41,7 @@ export function usePortsData() {
 		}
 	}, [initialPorts, setPorts]);
 
-	trpc.ports.subscribe.useSubscription(undefined, {
+	electronTrpc.ports.subscribe.useSubscription(undefined, {
 		onData: (event) => {
 			if (event.type === "add") {
 				addPort(event.port);
@@ -113,26 +112,16 @@ export function usePortsData() {
 				return {
 					workspaceId,
 					workspaceName: workspaceNames[workspaceId] || "Unknown",
-					isCurrentWorkspace: workspaceId === activeWorkspace?.id,
 					ports: merged,
 				};
 			},
 		);
 
-		groups.sort((a, b) => {
-			if (a.isCurrentWorkspace && !b.isCurrentWorkspace) return -1;
-			if (!a.isCurrentWorkspace && b.isCurrentWorkspace) return 1;
-			return a.workspaceName.localeCompare(b.workspaceName);
-		});
+		// Sort alphabetically by workspace name
+		groups.sort((a, b) => a.workspaceName.localeCompare(b.workspaceName));
 
 		return groups;
-	}, [
-		allWorkspaceIds,
-		allStaticPortsData?.ports,
-		ports,
-		workspaceNames,
-		activeWorkspace?.id,
-	]);
+	}, [allWorkspaceIds, allStaticPortsData?.ports, ports, workspaceNames]);
 
 	const totalPortCount = workspacePortGroups.reduce(
 		(sum, g) => sum + g.ports.length,
