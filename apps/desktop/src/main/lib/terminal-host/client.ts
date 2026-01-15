@@ -492,7 +492,11 @@ export class TerminalHostClient extends EventEmitter {
 		this.streamSocket.on("data", (data: string) => {
 			const messages = this.streamParser.parse(data);
 			for (const message of messages) {
-				this.handleMessage(message);
+				try {
+					this.handleMessage(message);
+				} catch (error) {
+					this.emit("error", error);
+				}
 			}
 		});
 	}
