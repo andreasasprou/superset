@@ -237,7 +237,11 @@ function TerminalSettingsPage() {
 						<Button
 							variant="destructive"
 							size="sm"
-							disabled={!daemonModeEnabled || killAllDaemonSessions.isPending}
+							disabled={
+								!daemonModeEnabled ||
+								aliveSessions.length === 0 ||
+								killAllDaemonSessions.isPending
+							}
 							onClick={() => setConfirmKillAllOpen(true)}
 						>
 							Kill all sessions
@@ -245,7 +249,11 @@ function TerminalSettingsPage() {
 						<Button
 							variant="secondary"
 							size="sm"
-							disabled={clearTerminalHistory.isPending}
+							disabled={
+								!daemonModeEnabled ||
+								aliveSessions.length === 0 ||
+								clearTerminalHistory.isPending
+							}
 							onClick={() => setConfirmClearHistoryOpen(true)}
 						>
 							Clear terminal history
