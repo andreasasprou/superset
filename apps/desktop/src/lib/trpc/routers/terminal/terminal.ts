@@ -17,6 +17,14 @@ let createOrAttachCallCounter = 0;
 
 const TERMINAL_SESSION_KILLED_MESSAGE = "TERMINAL_SESSION_KILLED";
 const userKilledSessions = new Set<string>();
+const SAFE_ID = z
+	.string()
+	.min(1)
+	.refine(
+		(value) =>
+			!value.includes("/") && !value.includes("\\") && !value.includes(".."),
+		{ message: "Invalid id" },
+	);
 
 /**
  * Terminal router using TerminalManager with node-pty
@@ -44,15 +52,15 @@ export const createTerminalRouter = () => {
 	}
 
 	return router({
-		createOrAttach: publicProcedure
-			.input(
-				z.object({
-					paneId: z.string(),
-					tabId: z.string(),
-					workspaceId: z.string(),
-					cols: z.number().optional(),
-					rows: z.number().optional(),
-					cwd: z.string().optional(),
+			createOrAttach: publicProcedure
+				.input(
+					z.object({
+						paneId: SAFE_ID,
+						tabId: z.string(),
+						workspaceId: SAFE_ID,
+						cols: z.number().optional(),
+						rows: z.number().optional(),
+						cwd: z.string().optional(),
 					initialCommands: z.array(z.string()).optional(),
 					skipColdRestore: z.boolean().optional(),
 					allowKilled: z.boolean().optional(),
